@@ -14,7 +14,7 @@ if (!apiKeys.length) console.warn('Gemini is not configured yet. Set GEMINI_API_
 
 const MODEL_NAMES = (process.env.GEMINI_MODELS || 'gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash')
   .split(',').map(x => x.trim()).filter(Boolean);
-const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 10000);
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 20000);
 const EXCLUSIVE_INSTRUCTION = (process.env.AI_SYSTEM_INSTRUCTION || '').trim();
 
 const conversationLog = [];
@@ -126,7 +126,6 @@ async function callHandler(call){
     let replyText,transcript='';
     try{
       if(active)active.status='שולח Audio ל-Gemini וממתין לתשובה';
-      try{transcript=await transcribeForDashboard(audioBase64);}catch{transcript='לא ניתן היה לתמלל את ההקלטה';}
       replyText=(await answerNormalQuestion(audioBase64)).trim();
       if(replyText.startsWith('SEARCH_REQUEST'))replyText=await answerWithWebSearch(audioBase64);
     }catch(e){
@@ -134,8 +133,11 @@ async function callHandler(call){
       replyText=e.status===503||e.status===429?'מצטערים אני עמוס כרגע נסה שוב עוד מעט':e.status===408?'מצטערים לקח יותר מדי זמן לענות נסה שוב':'מצטער הייתה תקלה בעיבוד השאלה אפשר לנסות שוב';
     }
     replyText=sanitizeForYemot(replyText)||'מצטער לא הצלחתי לנסח תשובה נסה שוב';
+    // Play the AI answer first; dashboard transcription is best-effort and must not delay the caller.
+    try{await call.id_list_message([{type:'text',data:replyText}],{prependToNextAction:true});}catch(e){logDetailedError('playback',e);}
+    try{transcript=await transcribeForDashboard(audioBase64);}catch{transcript='לא ניתן היה לתמלל את ההקלטה';}
     await addConversationEntry({phone:callerPhone,callId,userText:transcript,geminiText:replyText});
-    try{await call.id_list_message([{type:'text',data:replyText}],{prependToNextAction:true});activeCalls.delete(activeKey);}
+    activeCalls.delete(activeKey);
     catch(e){logDetailedError('playback',e);await call.id_list_message([{type:'text',data:'מצטער הייתה תקלה בהקראת התשובה'}],{prependToNextAction:true});}
   }
 }
