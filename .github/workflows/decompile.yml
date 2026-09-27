@@ -16,21 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install extractors and decompiler
+      - name: Install extraction tools
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install pyinstxtractor-ng decompyle3
+          python3 -m pip install pyinstxtractor-ng
 
       - name: Extract PyInstaller executable
         run: |
           rm -rf "א/פירוק"
           mkdir -p "א/פירוק"
           pyinstxtractor-ng --one-dir "א/סטודיו Q8.exe"
-          echo "=== Looking for extractor output ==="
-          find . -maxdepth 3 -type d -name '*_extracted' -print
           EXTRACTED="$(find . -maxdepth 3 -type d -name '*_extracted' -print -quit)"
           if [ -n "$EXTRACTED" ] && [ -d "$EXTRACTED" ]; then
-            echo "Using extracted directory: $EXTRACTED"
             cp -a "$EXTRACTED"/. "א/פירוק"/
             rm -rf "$EXTRACTED"
           else
@@ -38,32 +35,48 @@ jobs:
             exit 1
           fi
 
+      - name: Build Python 3.14 capable pycdc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git
+          git clone --depth 1 https://github.com/Youchuang-Studio/pycdc-rapid.git pycdc-rapid
+          cmake -S pycdc-rapid -B pycdc-rapid/build
+          cmake --build pycdc-rapid/build --config Release -j2
+          find pycdc-rapid/build -type f \( -name pycdc -o -name pycdas \) -print
+
       - name: Decompile Python bytecode
         shell: bash
         run: |
           set +e
           mkdir -p "א/פירוק/קוד"
+          PYCDEC="$(find pycdc-rapid/build -type f -name pycdc -print -quit)"
+          PYCdas="$(find pycdc-rapid/build -type f -name pycdas -print -quit)"
+          if [ -z "$PYCDEC" ]; then
+            echo "pycdc was not built."
+            exit 1
+          fi
+
           TOTAL=0
           SUCCESS=0
-
           while IFS= read -r -d '' PYC; do
             TOTAL=$((TOTAL + 1))
             REL="${PYC#א/פירוק/}"
             OUT="א/פירוק/קוד/${REL%.pyc}.py"
             mkdir -p "$(dirname "$OUT")"
-
             echo "=== Decompiling: $REL ==="
-            python3 -m decompyle3 -o "$(dirname "$OUT")" "$PYC" > /tmp/decomp.log 2>&1
+            "$PYCDEC" "$PYC" > "$OUT" 2> /tmp/pycdc.log
             RC=$?
-
-            if [ $RC -eq 0 ] && [ -f "$OUT" ]; then
+            if [ $RC -eq 0 ] && [ -s "$OUT" ]; then
               SUCCESS=$((SUCCESS + 1))
               echo "OK: $OUT"
             else
               echo "FAILED: $REL"
-              cat /tmp/decomp.log || true
-              echo "# Decompilation failed for: $REL" > "$OUT"
-              echo "# See GitHub Actions log for details." >> "$OUT"
+              cat /tmp/pycdc.log || true
+              if [ -n "$PYCdas" ]; then
+                "$PYCdas" "$PYC" > "${OUT%.py}.dis.txt" 2>&1 || true
+              fi
+              echo "# pycdc could not fully decompile: $REL" > "$OUT"
+              echo "# A .dis.txt file is included when pycdas could disassemble it." >> "$OUT"
             fi
           done < <(find "א/פירוק" -type f -name '*.pyc' -print0)
 
@@ -72,24 +85,28 @@ jobs:
           echo "Successful: $SUCCESS"
           echo "Failed: $((TOTAL - SUCCESS))"
 
-      - name: Decompile main app explicitly
-        shell: bash
+      - name: Main app fallback disassembly
+        if: always()
         run: |
           if [ -f "א/פירוק/app.pyc" ]; then
-            echo "=== Main application: app.pyc ==="
-            python3 -m decompyle3 "א/פירוק/app.pyc" || true
+            PYCdas="$(find pycdc-rapid/build -type f -name pycdas -print -quit)"
+            if [ -n "$PYCdas" ]; then
+              "$PYCdas" "א/פירוק/app.pyc" > "א/פירוק/קוד/app.dis.txt" 2>&1 || true
+            fi
           fi
 
       - name: Show result
         run: |
           echo "=== Python source files ==="
-          find "א/פירוק/קוד" -type f -name '*.py' | sort | head -500
-          echo "=== Source file count ==="
-          find "א/פירוק/קוד" -type f -name '*.py' | wc -l
+          find "א/פירוק/קוד" -type f \( -name '*.py' -o -name '*.dis.txt' \) | sort | head -500
+          echo "=== Main app preview ==="
+          if [ -f "א/פירוק/קוד/app.py" ]; then
+            sed -n '1,240p' "א/פירוק/קוד/app.py"
+          fi
 
       - name: Save extraction and decompiled code
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "א/פירוק"
-          git diff --cached --quiet || (git commit -m "Decompile Studio Q8 Python bytecode" && git push)
+          git diff --cached --quiet || (git commit -m "Use Python 3.14 capable decompiler for Studio Q8" && git push)
