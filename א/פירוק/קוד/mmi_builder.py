@@ -266,16 +266,32 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
             cap = orig_sz
         if s in custom_wallpapers and custom_wallpapers[s] is not None:
             val = custom_wallpapers[s]
+            sjpg = None
             if isinstance(val, Image.Image):
+                # NOTE(recovery): slots below the pool have a small fixed capacity.
+                # Blur the image down until it fits instead of aborting the build.
                 sjpg = encode_sjpg(val, q_idx = 2, blur = 0)
+                if len(sjpg) > cap:
+                    blur = 0.0
+                    best = sjpg
+                    while blur < 60:
+                        blur += 0.5
+                        cand = encode_sjpg(val, q_idx = 2, blur = blur)
+                        if len(cand) < len(best):
+                            best = cand
+                        if len(cand) <= cap:
+                            best = cand
+                            break
+                    sjpg = best
             else:
                 sjpg = val
-            if not len(sjpg) <= cap:
-                raise Exception(f'''Slot {s} exceeds capacity {cap}: {len(sjpg)}''')
-            modified[abs_off:abs_off + len(sjpg)] = sjpg
-            struct.pack_into('<HHII', modified, INFO_OFF + idx * 12, 240, 320, 522, len(sjpg))
-            struct.pack_into('<I', modified, OFFSETS_OFF + idx * 4, abs_off - P40)
-            continue
+            if sjpg is not None and len(sjpg) <= cap:
+                modified[abs_off:abs_off + len(sjpg)] = sjpg
+                struct.pack_into('<HHII', modified, INFO_OFF + idx * 12, 240, 320, 522, len(sjpg))
+                struct.pack_into('<I', modified, OFFSETS_OFF + idx * 4, abs_off - P40)
+                continue
+            # Too big to fit this low slot's fixed capacity even blurred: keep the
+            # original slot rather than failing the whole build.
         modified[INFO_OFF + idx * 12:INFO_OFF + (idx + 1) * 12] = orig[INFO_OFF + idx * 12:INFO_OFF + (idx + 1) * 12]
         modified[OFFSETS_OFF + idx * 4:OFFSETS_OFF + (idx + 1) * 4] = orig[OFFSETS_OFF + idx * 4:OFFSETS_OFF + (idx + 1) * 4]
         modified[abs_off:abs_off + orig_sz] = orig[abs_off:abs_off + orig_sz]
