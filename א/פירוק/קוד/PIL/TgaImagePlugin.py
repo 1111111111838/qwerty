@@ -1,0 +1,180 @@
+# Source Generated with Decompyle++
+# File: TgaImagePlugin.pyc (Python 3.14)
+
+from __future__ import annotations
+import os
+import warnings
+from typing import IO
+from . import Image, ImageFile, ImagePalette
+from ._binary import i16le as i16
+from ._binary import i32le as i32
+from ._binary import o8
+from ._binary import o16le as o16
+MODES = {
+    (2, 32): 'BGRA',
+    (2, 24): 'BGR',
+    (2, 16): 'BGRA;15Z',
+    (3, 16): 'LA',
+    (3, 8): 'L',
+    (3, 1): '1',
+    (1, 8): 'P' }
+
+class TgaImageFile(ImageFile.ImageFile):
+    format = 'TGA'
+    format_description = 'Targa'
+    
+    def _open(self):
+        if self.fp is None:
+            raise AssertionError
+        s = self.fp.read(18)
+        id_len = s[0]
+        colormaptype = s[1]
+        imagetype = s[2]
+        depth = s[16]
+        flags = s[17]
+        self._size = (i16(s, 12), i16(s, 14))
+        if not (not (colormaptype not in (0, 1)) and not (self.size[0] <= 0) and not (self.size[1] <= 0)) or depth not in (1, 8, 16, 24, 32):
+            msg = 'not a TGA file'
+            raise SyntaxError(msg)
+        if imagetype in (3, 11):
+            self._mode = 'L'
+            if depth == 1:
+                self._mode = '1'
+            elif depth == 16:
+                self._mode = 'LA'
+        elif imagetype in (1, 9):
+            self._mode = 'P' if colormaptype else 'L'
+        elif imagetype in (2, 10):
+            self._mode = 'RGB' if depth == 24 else 'RGBA'
+        else:
+            msg = 'unknown TGA mode'
+            raise SyntaxError(msg)
+        orientation = flags & 48
+        self._flip_horizontally = orientation in (16, 48)
+        if orientation in (32, 48):
+            orientation = 1
+        elif orientation in (0, 16):
+            orientation = -1
+        else:
+            msg = 'unknown TGA orientation'
+            raise SyntaxError(msg)
+        self.info['orientation'] = orientation
+        if imagetype & 8:
+            self.info['compression'] = 'tga_rle'
+        if id_len:
+            self.info['id_section'] = self.fp.read(id_len)
+        if colormaptype:
+            mapdepth = i16(s, 5)
+            size = s[7]
+            start = i16(s, 3)
+            if mapdepth == 16:
+                self.palette = ImagePalette.raw('BGRA;15Z', bytes(2 * start) + self.fp.read(2 * size))
+                self.palette.mode = 'RGBA'
+            elif mapdepth == 24:
+                self.palette = ImagePalette.raw('BGR', bytes(3 * start) + self.fp.read(3 * size))
+            elif mapdepth == 32:
+                self.palette = ImagePalette.raw('BGRA', bytes(4 * start) + self.fp.read(4 * size))
+            else:
+                msg = 'unknown TGA map depth'
+                raise SyntaxError(msg)
+        
+        try:
+            rawmode = MODES[(imagetype & 7, depth)]
+            if imagetype & 8:
+                self.tile = [
+                    ImageFile._Tile('tga_rle', (0, 0) + self.size, self.fp.tell(), (rawmode, orientation, depth))]
+                return None
+            self.tile = [
+                ImageFile._Tile('raw', (0, 0) + self.size, self.fp.tell(), (rawmode, 0, orientation))]
+        except KeyError:
+            return None
+
+
+    
+    def load_end(self):
+        '''RGBA'''
+        if self.mode == 'RGBA':
+            if self.fp is None:
+                raise AssertionError
+            self.fp.seek(-26, os.SEEK_END)
+            footer = self.fp.read(26)
+            if footer.endswith(b'TRUEVISION-XFILE.\x00'):
+                extension_offset = i32(footer)
+                if extension_offset:
+                    self.fp.seek(extension_offset + 494)
+                    attributes_type = self.fp.read(1)
+                    if attributes_type == b'\x00':
+                        self.im.fillband(3, 255)
+        if self._flip_horizontally:
+            self.im = self.im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            return None
+
+
+SAVE = {
+    'RGBA': ('BGRA', 32, 0, 2),
+    'RGB': ('BGR', 24, 0, 2),
+    'P': ('P', 8, 1, 1),
+    'LA': ('LA', 16, 0, 3),
+    'L': ('L', 8, 0, 3),
+    '1': ('1', 1, 0, 3) }
+
+def _save(im, fp, filename):
+    '''cannot write mode '''
+    
+    try:
+        rawmode, bits, colormaptype, imagetype = SAVE[im.mode]
+    except KeyError as e:
+        msg = f'''cannot write mode {im.mode} as TGA'''
+        raise OSError(msg) from e
+
+    if 'rle' in im.encoderinfo:
+        rle = im.encoderinfo['rle']
+    else:
+        compression = im.encoderinfo.get('compression', im.info.get('compression'))
+        rle = compression == 'tga_rle'
+    if rle:
+        if im.mode == '1':
+            msg = f'''cannot write mode {im.mode} as TGA with run-length encoding'''
+            raise OSError(msg)
+        imagetype += 8
+    id_section = im.encoderinfo.get('id_section', im.info.get('id_section', ''))
+    id_len = len(id_section)
+    if id_len > 255:
+        id_len = 255
+        id_section = id_section[slice(None, 255, None)]
+        warnings.warn('id_section has been trimmed to 255 characters')
+    if colormaptype:
+        palette = im.im.getpalette('RGB', 'BGR')
+        colormapentry = len(palette) // 3
+        colormaplength = 24
+    else:
+        colormapentry = 0
+        colormaplength = 0
+    if im.mode in ('LA', 'RGBA'):
+        flags = 8
+    else:
+        flags = 0
+    orientation = im.encoderinfo.get('orientation', im.info.get('orientation', -1))
+    if orientation > 0:
+        flags = flags | 32
+    fp.write(o8(id_len) + o8(colormaptype) + o8(imagetype) + o16(0) + o16(colormaplength) + o8(colormapentry) + o16(0) + o16(0) + o16(im.size[0]) + o16(im.size[1]) + o8(bits) + o8(flags))
+    if id_section:
+        fp.write(id_section)
+    if colormaptype:
+        fp.write(palette)
+    if rle:
+        ImageFile._save(im, fp, [
+            ImageFile._Tile('tga_rle', (0, 0) + im.size, 0, (rawmode, orientation))])
+    else:
+        ImageFile._save(im, fp, [
+            ImageFile._Tile('raw', (0, 0) + im.size, 0, (rawmode, 0, orientation))])
+    fp.write(b'\x00\x00\x00\x00\x00\x00\x00\x00TRUEVISION-XFILE.\x00')
+
+Image.register_open(TgaImageFile.format, TgaImageFile)
+Image.register_save(TgaImageFile.format, _save)
+Image.register_extensions(TgaImageFile.format, [
+    '.tga',
+    '.icb',
+    '.vda',
+    '.vst'])
+Image.register_mime(TgaImageFile.format, 'image/x-tga')

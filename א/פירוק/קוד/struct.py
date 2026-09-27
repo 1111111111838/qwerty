@@ -1,2 +1,15 @@
-# Decompilation failed for: struct.pyc
-# See GitHub Actions log for details.
+# Source Generated with Decompyle++
+# File: struct.pyc (Python 3.14)
+
+__all__ = [
+    'calcsize',
+    'pack',
+    'pack_into',
+    'unpack',
+    'unpack_from',
+    'iter_unpack',
+    'Struct',
+    'error']
+from _struct import *
+from _struct import _clearcache
+from _struct import __doc__
