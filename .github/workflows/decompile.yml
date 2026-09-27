@@ -2,6 +2,9 @@ name: פירוק סטודיו Q8
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'א/סטודיו Q8.exe'
 
 permissions:
   contents: write
@@ -11,16 +14,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install 7zip
-        run: sudo apt-get update && sudo apt-get install -y p7zip-full
-      - name: Extract
+
+      - name: Install PyInstaller extractor
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyinstxtractor-ng
+
+      - name: Extract PyInstaller executable
         run: |
           rm -rf "א/פירוק"
           mkdir -p "א/פירוק"
-          7z x "א/סטודיו Q8.exe" -o"א/פירוק" -y || true
-      - name: Save
+          pyinstxtractor-ng --one-dir "א/סטודיו Q8.exe"
+          EXTRACTED="א/סטודיו Q8.exe_extracted"
+          if [ -d "$EXTRACTED" ]; then
+            cp -a "$EXTRACTED"/. "א/פירוק"/
+            rm -rf "$EXTRACTED"
+          else
+            echo "Extractor did not create the expected output directory."
+            exit 1
+          fi
+
+      - name: Show extracted files
+        run: |
+          echo "=== Extracted files ==="
+          find "א/פירוק" -type f | sort | head -500
+          echo "=== File count ==="
+          find "א/פירוק" -type f | wc -l
+
+      - name: Save extraction
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "א/פירוק"
-          git diff --cached --quiet || (git commit -m "Extract Studio Q8" && git push)
+          git diff --cached --quiet || (git commit -m "Extract Studio Q8 with PyInstaller extractor" && git push)
