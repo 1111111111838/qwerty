@@ -2,9 +2,10 @@
 # Studio Q8 - Wallpaper Studio  (single-file build, application code only)
 # Recovered from the packaged executable and repaired to run as ONE module.
 # Intra-app imports removed and aliased below; importlib.reload() removed.
+# Several decompiler-corrupted "if" branches that had become infinite "while"
+# loops were restored (recolor_all_chunks, icon meta, text patch/scan).
 # prepare_slots_pool caches stock re-encodes and bounds blur loops.
-# The deploy worker now writes a full traceback to q8_build_error.log on error.
-# Spots the decompiler corrupted are marked "NOTE(recovery)".
+# Deploy errors are written to q8_build_error.log. Marks: "NOTE(recovery)".
 # ============================================================
 
 import sys as _sys
@@ -845,9 +846,12 @@ def recolor_all_chunks(target_hex):
     target_565_bytes = struct.pack('>H', c_target_565)
     recolored = []
     for off, sz, data in base_chunks:
-        while off in (433980, 891744):
+        # NOTE(recovery): decompiler rendered this `if` as `while`, causing an
+        # infinite append -> MemoryError. Restored to `if ...: continue`.
+        if off in (433980, 891744):
             new_banner = target_565_bytes * (sz // 2)
             recolored.append((off, sz, new_banner))
+            continue
         if sz == 2:
             recolored.append((off, sz, target_565_bytes))
             continue
@@ -895,12 +899,10 @@ def _get_fast_icon_meta():
         sz = int.from_bytes(orig[1216 + idx * 12 + 8:1216 + idx * 12 + 12], 'little')
         abs_off = 1112 + rel
         for off, csz, data in base_chunks:
-            while abs_off <= off:
-                if not off < abs_off + sz:
-                    continue
-            base_chunks
-            meta.append((idx, abs_off, sz, off, csz, data))
-            icons
+            # NOTE(recovery): decompiler corrupted this overlap test into an
+            # infinite `while` with stray statements. Restored to a range check.
+            if abs_off <= off < abs_off + sz:
+                meta.append((idx, abs_off, sz, off, csz, data))
     _fast_icon_meta = meta
     return _fast_icon_meta
 
@@ -1070,26 +1072,28 @@ Applies custom text patches directly into MMI bytearray:
             body_enc = body_enc + b'\x00' * (ABOUT_BODY_MAX_BYTES - len(body_enc))
         mmi_bytes[ABOUT_BODY_OFF + 4:ABOUT_BODY_OFF + 4 + ABOUT_BODY_MAX_BYTES] = body_enc
     for orig_text, new_text in replacements.items():
-        if orig_text and new_text:
-            while orig_text == new_text:
-                pass
+        # NOTE(recovery): decompiler rendered this guard as `while ...: pass`
+        # (infinite). Restored to skip no-op / empty replacements.
+        if not orig_text or not new_text or orig_text == new_text:
+            continue
         orig_enc = orig_text.encode('utf-16le')
         new_enc = new_text.encode('utf-16le')
+        # NOTE(recovery): decompiler flattened this region scan into a single
+        # check. Restored to a while-scan (same shape as search_hebrew_strings),
+        # replacing every matching string entry. p always advances, so no hang.
         p = STR_REGION_START
-        if not p < STR_REGION_END - 4:
-            continue
-        flag = int.from_bytes(mmi_bytes[p:p + 2], 'little')
-        if flag == 128:
-            length = int.from_bytes(mmi_bytes[p + 2:p + 4], 'little')
-            if length >= len(new_enc) and length <= 400:
-                curr_enc = mmi_bytes[p + 4:p + 4 + length]
-                if curr_enc.startswith(orig_enc):
-                    padded_new = new_enc + b'\x00' * (length - len(new_enc))
-                    mmi_bytes[p + 4:p + 4 + length] = padded_new
-                    continue
-            p += 4 + length
-            continue
-        p += 2
+        while p < STR_REGION_END - 4:
+            flag = int.from_bytes(mmi_bytes[p:p + 2], 'little')
+            if flag == 128:
+                length = int.from_bytes(mmi_bytes[p + 2:p + 4], 'little')
+                if length >= len(new_enc) and length <= 400:
+                    curr_enc = mmi_bytes[p + 4:p + 4 + length]
+                    if curr_enc.startswith(orig_enc):
+                        padded_new = new_enc + b'\x00' * (length - len(new_enc))
+                        mmi_bytes[p + 4:p + 4 + length] = padded_new
+                p += 4 + length
+                continue
+            p += 2
     return mmi_bytes
 
 
@@ -1111,7 +1115,6 @@ Returns list of dicts: {'offset': int, 'text': str, 'max_chars': int}
             length = int.from_bytes(d[p + 2:p + 4], 'little')
             if 2 <= length and length <= 300 and p + 4 + length <= STR_REGION_END:
                 raw = d[p + 4:p + 4 + length]
-                
                 try:
                     txt = raw.decode('utf-16le').rstrip('\x00')
                     if query_clean in txt:
@@ -1122,11 +1125,14 @@ Returns list of dicts: {'offset': int, 'text': str, 'max_chars': int}
                             'offset': p + 4 })
                         if len(results) >= limit:
                             return results
-                    p += 4 + length
                 except Exception:
                     pass
-
+                # NOTE(recovery): advance unconditionally so a string that fails
+                # to decode cannot pin p and hang the scan.
+                p += 4 + length
                 continue
+            p += 2
+            continue
         p += 2
     return results
 

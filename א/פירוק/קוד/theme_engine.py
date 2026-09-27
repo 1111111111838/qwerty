@@ -187,9 +187,12 @@ def recolor_all_chunks(target_hex):
     target_565_bytes = struct.pack('>H', c_target_565)
     recolored = []
     for off, sz, data in base_chunks:
-        while off in (433980, 891744):
+        # NOTE(recovery): decompiler rendered this `if` as `while`, causing an
+        # infinite append -> MemoryError. Restored to `if ...: continue`.
+        if off in (433980, 891744):
             new_banner = target_565_bytes * (sz // 2)
             recolored.append((off, sz, new_banner))
+            continue
         if sz == 2:
             recolored.append((off, sz, target_565_bytes))
             continue
@@ -237,12 +240,10 @@ def _get_fast_icon_meta():
         sz = int.from_bytes(orig[1216 + idx * 12 + 8:1216 + idx * 12 + 12], 'little')
         abs_off = 1112 + rel
         for off, csz, data in base_chunks:
-            while abs_off <= off:
-                if not off < abs_off + sz:
-                    continue
-            base_chunks
-            meta.append((idx, abs_off, sz, off, csz, data))
-            icons
+            # NOTE(recovery): decompiler corrupted this overlap test into an
+            # infinite `while` with stray statements. Restored to a range check.
+            if abs_off <= off < abs_off + sz:
+                meta.append((idx, abs_off, sz, off, csz, data))
     _fast_icon_meta = meta
     return _fast_icon_meta
 

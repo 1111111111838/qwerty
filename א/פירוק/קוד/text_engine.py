@@ -98,26 +98,28 @@ Applies custom text patches directly into MMI bytearray:
             body_enc = body_enc + b'\x00' * (ABOUT_BODY_MAX_BYTES - len(body_enc))
         mmi_bytes[ABOUT_BODY_OFF + 4:ABOUT_BODY_OFF + 4 + ABOUT_BODY_MAX_BYTES] = body_enc
     for orig_text, new_text in replacements.items():
-        if orig_text and new_text:
-            while orig_text == new_text:
-                pass
+        # NOTE(recovery): decompiler rendered this guard as `while ...: pass`
+        # (infinite). Restored to skip no-op / empty replacements.
+        if not orig_text or not new_text or orig_text == new_text:
+            continue
         orig_enc = orig_text.encode('utf-16le')
         new_enc = new_text.encode('utf-16le')
+        # NOTE(recovery): decompiler flattened this region scan into a single
+        # check. Restored to a while-scan (same shape as search_hebrew_strings),
+        # replacing every matching string entry. p always advances, so no hang.
         p = STR_REGION_START
-        if not p < STR_REGION_END - 4:
-            continue
-        flag = int.from_bytes(mmi_bytes[p:p + 2], 'little')
-        if flag == 128:
-            length = int.from_bytes(mmi_bytes[p + 2:p + 4], 'little')
-            if length >= len(new_enc) and length <= 400:
-                curr_enc = mmi_bytes[p + 4:p + 4 + length]
-                if curr_enc.startswith(orig_enc):
-                    padded_new = new_enc + b'\x00' * (length - len(new_enc))
-                    mmi_bytes[p + 4:p + 4 + length] = padded_new
-                    continue
-            p += 4 + length
-            continue
-        p += 2
+        while p < STR_REGION_END - 4:
+            flag = int.from_bytes(mmi_bytes[p:p + 2], 'little')
+            if flag == 128:
+                length = int.from_bytes(mmi_bytes[p + 2:p + 4], 'little')
+                if length >= len(new_enc) and length <= 400:
+                    curr_enc = mmi_bytes[p + 4:p + 4 + length]
+                    if curr_enc.startswith(orig_enc):
+                        padded_new = new_enc + b'\x00' * (length - len(new_enc))
+                        mmi_bytes[p + 4:p + 4 + length] = padded_new
+                p += 4 + length
+                continue
+            p += 2
     return mmi_bytes
 
 
@@ -139,7 +141,6 @@ Returns list of dicts: {'offset': int, 'text': str, 'max_chars': int}
             length = int.from_bytes(d[p + 2:p + 4], 'little')
             if 2 <= length and length <= 300 and p + 4 + length <= STR_REGION_END:
                 raw = d[p + 4:p + 4 + length]
-                
                 try:
                     txt = raw.decode('utf-16le').rstrip('\x00')
                     if query_clean in txt:
@@ -150,11 +151,14 @@ Returns list of dicts: {'offset': int, 'text': str, 'max_chars': int}
                             'offset': p + 4 })
                         if len(results) >= limit:
                             return results
-                    p += 4 + length
                 except Exception:
                     pass
-
+                # NOTE(recovery): advance unconditionally so a string that fails
+                # to decode cannot pin p and hang the scan.
+                p += 4 + length
                 continue
+            p += 2
+            continue
         p += 2
     return results
 
