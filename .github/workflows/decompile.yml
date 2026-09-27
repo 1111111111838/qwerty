@@ -16,10 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install PyInstaller extractor
+      - name: Install extractors and decompiler
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install pyinstxtractor-ng
+          python3 -m pip install pyinstxtractor-ng decompyle3
 
       - name: Extract PyInstaller executable
         run: |
@@ -38,16 +38,58 @@ jobs:
             exit 1
           fi
 
-      - name: Show extracted files
+      - name: Decompile Python bytecode
+        shell: bash
         run: |
-          echo "=== Extracted files ==="
-          find "א/פירוק" -type f | sort | head -500
-          echo "=== File count ==="
-          find "א/פירוק" -type f | wc -l
+          set +e
+          mkdir -p "א/פירוק/קוד"
+          TOTAL=0
+          SUCCESS=0
 
-      - name: Save extraction
+          while IFS= read -r -d '' PYC; do
+            TOTAL=$((TOTAL + 1))
+            REL="${PYC#א/פירוק/}"
+            OUT="א/פירוק/קוד/${REL%.pyc}.py"
+            mkdir -p "$(dirname "$OUT")"
+
+            echo "=== Decompiling: $REL ==="
+            python3 -m decompyle3 -o "$(dirname "$OUT")" "$PYC" > /tmp/decomp.log 2>&1
+            RC=$?
+
+            if [ $RC -eq 0 ] && [ -f "$OUT" ]; then
+              SUCCESS=$((SUCCESS + 1))
+              echo "OK: $OUT"
+            else
+              echo "FAILED: $REL"
+              cat /tmp/decomp.log || true
+              echo "# Decompilation failed for: $REL" > "$OUT"
+              echo "# See GitHub Actions log for details." >> "$OUT"
+            fi
+          done < <(find "א/פירוק" -type f -name '*.pyc' -print0)
+
+          echo "=== Decompilation summary ==="
+          echo "PYC files: $TOTAL"
+          echo "Successful: $SUCCESS"
+          echo "Failed: $((TOTAL - SUCCESS))"
+
+      - name: Decompile main app explicitly
+        shell: bash
+        run: |
+          if [ -f "א/פירוק/app.pyc" ]; then
+            echo "=== Main application: app.pyc ==="
+            python3 -m decompyle3 "א/פירוק/app.pyc" || true
+          fi
+
+      - name: Show result
+        run: |
+          echo "=== Python source files ==="
+          find "א/פירוק/קוד" -type f -name '*.py' | sort | head -500
+          echo "=== Source file count ==="
+          find "א/פירוק/קוד" -type f -name '*.py' | wc -l
+
+      - name: Save extraction and decompiled code
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "א/פירוק"
-          git diff --cached --quiet || (git commit -m "Extract Studio Q8 with PyInstaller extractor" && git push)
+          git diff --cached --quiet || (git commit -m "Decompile Studio Q8 Python bytecode" && git push)
