@@ -26,12 +26,15 @@ jobs:
           rm -rf "א/פירוק"
           mkdir -p "א/פירוק"
           pyinstxtractor-ng --one-dir "א/סטודיו Q8.exe"
-          EXTRACTED="א/סטודיו Q8.exe_extracted"
-          if [ -d "$EXTRACTED" ]; then
+          echo "=== Looking for extractor output ==="
+          find . -maxdepth 3 -type d -name '*_extracted' -print
+          EXTRACTED="$(find . -maxdepth 3 -type d -name '*_extracted' -print -quit)"
+          if [ -n "$EXTRACTED" ] && [ -d "$EXTRACTED" ]; then
+            echo "Using extracted directory: $EXTRACTED"
             cp -a "$EXTRACTED"/. "א/פירוק"/
             rm -rf "$EXTRACTED"
           else
-            echo "Extractor did not create the expected output directory."
+            echo "Extractor did not create an extracted directory."
             exit 1
           fi
 
