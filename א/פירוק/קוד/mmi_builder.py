@@ -157,9 +157,18 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
         abs_p = P40 + rel
         stock_im = spd_sjpg.sjpg_to_image(orig_mmi[abs_p:abs_p + sz])
         packed[s] = encode_sjpg(stock_im, q_idx = 0, blur = 0)
-    while sum((len(d) + 3 & -4) for d in packed.values()) > pool_capacity and blurs:
+    # NOTE(recovery): the original blur-fitting loop was lost in decompilation.
+    # This reconstruction is BOUNDED so it can never hang: each slot's blur is
+    # capped, exhausted slots are dropped, and a hard guard limits total passes.
+    # It fails fast with the capacity error below rather than grinding for hours.
+    _guard = 0
+    while sum((len(d) + 3 & -4) for d in packed.values()) > pool_capacity and blurs and _guard < 4000:
+        _guard += 1
         largest_s = max(blurs.keys(), key = (lambda s: len(packed[s])))
-        blurs[largest_s] += 0.05
+        blurs[largest_s] += 0.25
+        if blurs[largest_s] > 20:
+            del blurs[largest_s]
+            continue
         packed[largest_s] = encode_sjpg(custom_wallpapers[largest_s], q_idx = 0, blur = blurs[largest_s])
     tot = sum((len(d) + 3 & -4) for d in packed.values())
     if not tot <= pool_capacity:
