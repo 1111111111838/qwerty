@@ -27,8 +27,14 @@ _CHR_Q0 = [
         10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
         10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
 ]
-JPG_LUM_QUANT_TBL = [list(_LUM_Q0) for _ in range(5)]
-JPG_CHR_QUANT_TBL = [list(_CHR_Q0) for _ in range(5)]
+# NOTE(recovery): the decompiled quant values came out ~8x too small (only the
+# ratios survived, not the scale). Decoding real device slots with the values
+# as-is gives washed-out images and encoding at that scale makes the device
+# over-multiply coefficients ~8x -> clipping -> psychedelic garbage. Scaling the
+# recovered table by 8 (a natural <<3) restores vibrant, device-correct output.
+_QUANT_SCALE = 8
+JPG_LUM_QUANT_TBL = [[min(255, v * _QUANT_SCALE) for v in _LUM_Q0] for _ in range(5)]
+JPG_CHR_QUANT_TBL = [[min(255, v * _QUANT_SCALE) for v in _CHR_Q0] for _ in range(5)]
 JPG_HUFF_DATA = [
         255, 196, 1, 162, 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0,
         0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,

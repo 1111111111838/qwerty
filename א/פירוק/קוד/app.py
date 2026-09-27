@@ -1949,6 +1949,24 @@ class Q8WallpaperStudio(tk.Tk):
                 self.post_ui((lambda : self.lbl_status.config(text = '‏בונה את קובץ המשאבים, הטקסטים וערכת הנושא...')))
                 use_icons = self.use_unisoc_icons.get() if hasattr(self, 'use_unisoc_icons') else False
                 orig, mod = mmi_builder.build_modified_mmi(custom_wallpapers, theme_hex = self.confirmed_theme_hex, use_unisoc_icons = use_icons)
+                # DEBUG(recovery): save the encoded SJPG of the first few custom slots
+                # so their exact bytes can be compared against real device slots.
+                try:
+                    import struct as _st
+                    _P40 = 39319156; _INFO = 39319260; _OFFS = 39320088
+                    _saved = 0
+                    for _slot in sorted(custom_wallpapers.keys()):
+                        if _slot == 1 or _saved >= 3:
+                            continue
+                        _idx = _slot - 2
+                        _rel = _st.unpack_from('<I', mod, _OFFS + _idx * 4)[0]
+                        _sz = _st.unpack_from('<I', mod, _INFO + _idx * 12 + 8)[0]
+                        _ab = _P40 + _rel
+                        with open(os.path.join(BASE_DIR, f'debug_mine_slot_{_slot}.sjpg'), 'wb') as _df:
+                            _df.write(mod[_ab:_ab + _sz])
+                        _saved += 1
+                except Exception:
+                    pass
                 diff_table = mmi_builder.generate_diff_table(orig, mod)
                 self.post_ui((lambda : self.lbl_status.config(text = '‏מטמיע את ה-DLL בתיקיית WOT...')))
                 dll_generator.build_and_deploy_dll(diff_table)

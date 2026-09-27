@@ -2,12 +2,12 @@
 # Studio Q8 - Wallpaper Studio  (single-file build, application code only)
 # Recovered from the packaged executable and repaired to run as ONE module.
 # Intra-app imports removed and aliased below; importlib.reload() removed.
-# Infinite "while" decompiler artifacts restored; packing caches stock decode
-# and lightly blurs the largest slot to fit tight pools; slot 1 falls back to
-# original if it cannot fit. Re-encoding uses q_idx=2 to match the device stock
-# SJPG format (verified against real device samples). Deploy errors ->
-# q8_build_error.log; writing the DLL under Program Files needs Administrator.
-# Marks: "NOTE(recovery)".
+# Key recovery fixes: infinite-while artifacts restored; SJPG quant tables
+# scaled x8 to the true device magnitude (decompiled values were ~8x too small,
+# which made the device over-multiply coefficients into garbage); re-encode uses
+# q_idx=2 to match the device stock format (verified against real device slots);
+# packing caches stock decode and bounds blur loops. Errors -> q8_build_error.log;
+# writing the DLL under Program Files needs Administrator. Marks: "NOTE(recovery)".
 # ============================================================
 
 import sys as _sys
@@ -50,8 +50,14 @@ _CHR_Q0 = [
         10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
         10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
 ]
-JPG_LUM_QUANT_TBL = [list(_LUM_Q0) for _ in range(5)]
-JPG_CHR_QUANT_TBL = [list(_CHR_Q0) for _ in range(5)]
+# NOTE(recovery): the decompiled quant values came out ~8x too small (only the
+# ratios survived, not the scale). Decoding real device slots with the values
+# as-is gives washed-out images and encoding at that scale makes the device
+# over-multiply coefficients ~8x -> clipping -> psychedelic garbage. Scaling the
+# recovered table by 8 (a natural <<3) restores vibrant, device-correct output.
+_QUANT_SCALE = 8
+JPG_LUM_QUANT_TBL = [[min(255, v * _QUANT_SCALE) for v in _LUM_Q0] for _ in range(5)]
+JPG_CHR_QUANT_TBL = [[min(255, v * _QUANT_SCALE) for v in _CHR_Q0] for _ in range(5)]
 JPG_HUFF_DATA = [
         255, 196, 1, 162, 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0,
         0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
@@ -3117,6 +3123,24 @@ class Q8WallpaperStudio(tk.Tk):
                 self.post_ui((lambda : self.lbl_status.config(text = '‏בונה את קובץ המשאבים, הטקסטים וערכת הנושא...')))
                 use_icons = self.use_unisoc_icons.get() if hasattr(self, 'use_unisoc_icons') else False
                 orig, mod = mmi_builder.build_modified_mmi(custom_wallpapers, theme_hex = self.confirmed_theme_hex, use_unisoc_icons = use_icons)
+                # DEBUG(recovery): save the encoded SJPG of the first few custom slots
+                # so their exact bytes can be compared against real device slots.
+                try:
+                    import struct as _st
+                    _P40 = 39319156; _INFO = 39319260; _OFFS = 39320088
+                    _saved = 0
+                    for _slot in sorted(custom_wallpapers.keys()):
+                        if _slot == 1 or _saved >= 3:
+                            continue
+                        _idx = _slot - 2
+                        _rel = _st.unpack_from('<I', mod, _OFFS + _idx * 4)[0]
+                        _sz = _st.unpack_from('<I', mod, _INFO + _idx * 12 + 8)[0]
+                        _ab = _P40 + _rel
+                        with open(os.path.join(BASE_DIR, f'debug_mine_slot_{_slot}.sjpg'), 'wb') as _df:
+                            _df.write(mod[_ab:_ab + _sz])
+                        _saved += 1
+                except Exception:
+                    pass
                 diff_table = mmi_builder.generate_diff_table(orig, mod)
                 self.post_ui((lambda : self.lbl_status.config(text = '‏מטמיע את ה-DLL בתיקיית WOT...')))
                 dll_generator.build_and_deploy_dll(diff_table)
