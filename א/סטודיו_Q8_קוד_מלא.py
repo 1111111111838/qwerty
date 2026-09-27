@@ -3,11 +3,12 @@
 # Combined application source (single-file build, application code only)
 #
 # Recovered from the packaged executable and repaired so the file parses,
-# byte-compiles and imports as ONE module. Because every original module is
-# concatenated here, the intra-app imports (import spd_sjpg, import mmi_builder,
-# ...) were removed and the module names are aliased to this file below, so all
-# cross-references keep working. Spots the decompiler corrupted are marked with
-# "NOTE(recovery)"; verify those against the original source where possible.
+# byte-compiles and runs as ONE module. Because every original module is
+# concatenated here, the intra-app imports (import spd_sjpg, ...) were removed
+# and the module names aliased to this file below, so all cross-references keep
+# working. The importlib.reload() calls that refreshed those separate modules
+# are no-ops in a single file and were removed (reloading __main__ raises
+# "spec not found"). Spots the decompiler corrupted are marked "NOTE(recovery)".
 # ============================================================
 
 import sys as _sys
@@ -3053,9 +3054,9 @@ class Q8WallpaperStudio(tk.Tk):
             
             try:
                 import importlib
-                importlib.reload(theme_engine)
-                importlib.reload(text_engine)
-                importlib.reload(mmi_builder)
+                # (removed importlib.reload(theme_engine) — no-op in single-file build)
+                # (removed importlib.reload(text_engine) — no-op in single-file build)
+                # (removed importlib.reload(mmi_builder) — no-op in single-file build)
                 custom_wallpapers = { }
                 for slot in range(1, TOTAL_WALLPAPERS + 1):
                     item = self.slot_state.get(slot)
