@@ -2,10 +2,11 @@
 # Studio Q8 - Wallpaper Studio  (single-file build, application code only)
 # Recovered from the packaged executable and repaired to run as ONE module.
 # Intra-app imports removed and aliased below; importlib.reload() removed.
-# Decompiler-corrupted "if" branches that became infinite "while" loops were
-# restored; prepare_slots_pool caches stock re-encodes and bounds blur loops;
-# slot 1 falls back to the original image if it cannot fit its 2551-byte region
-# instead of failing the build. Deploy errors -> q8_build_error.log.
+# Decompiler-corrupted infinite "while" loops restored; prepare_slots_pool
+# caches stock decode/re-encode and, when the pool is tight, lightly blurs the
+# largest slot (custom OR stock) until everything fits; slot 1 falls back to the
+# original if it cannot fit its 2551-byte region. Deploy errors -> q8_build_error.log
+# (writing the DLL under Program Files needs the app run as Administrator).
 # Marks: "NOTE(recovery)".
 # ============================================================
 
@@ -270,14 +271,18 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
     # NOTE(recovery): cache each stock slot's q0 re-encode so it is computed once
     # instead of on every start_slot pass (was ~10x redundant work -> looked hung).
     _stock_cache = { }
-    def _stock_packed(s):
-        if s not in _stock_cache:
+    _stock_img_cache = { }
+    def _stock_image(s):
+        if s not in _stock_img_cache:
             idx = s - 2
             rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + idx * 4)[0]
             sz = struct.unpack_from('<I', orig_mmi, INFO_OFF + idx * 12 + 8)[0]
             abs_p = P40 + rel
-            stock_im = spd_sjpg.sjpg_to_image(orig_mmi[abs_p:abs_p + sz])
-            _stock_cache[s] = encode_sjpg(stock_im, q_idx = 0, blur = 0)
+            _stock_img_cache[s] = spd_sjpg.sjpg_to_image(orig_mmi[abs_p:abs_p + sz])
+        return _stock_img_cache[s]
+    def _stock_packed(s):
+        if s not in _stock_cache:
+            _stock_cache[s] = encode_sjpg(_stock_image(s), q_idx = 0, blur = 0)
         return _stock_cache[s]
     while start_slot >= 20:
         start_idx = start_slot - 2
@@ -312,29 +317,35 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
     # the original source before treating this branch as authoritative.
     packed = { }
     blurs = { }
+    images = { }
     for s in range(start_slot, 71):
         val = custom_wallpapers.get(s)
         if val:
             if isinstance(val, bytes):
                 packed[s] = val
                 continue
+            images[s] = val
             blurs[s] = 0.0
             packed[s] = encode_sjpg(val, q_idx = 0, blur = 0)
             continue
+        # NOTE(recovery): keep the decoded stock image too, so the fit loop below
+        # can lightly blur the largest slot whether it is custom or stock.
+        images[s] = _stock_image(s)
+        blurs[s] = 0.0
         packed[s] = _stock_packed(s)
     # NOTE(recovery): the original blur-fitting loop was lost in decompilation.
-    # This reconstruction is BOUNDED so it can never hang: each slot's blur is
-    # capped, exhausted slots are dropped, and a hard guard limits total passes.
-    # It fails fast with the capacity error below rather than grinding for hours.
+    # Reconstructed and BOUNDED: repeatedly blur the current largest slot (custom
+    # or stock) a little and re-encode until everything fits the pool. A per-slot
+    # blur cap and a hard guard guarantee termination.
     _guard = 0
-    while sum((len(d) + 3 & -4) for d in packed.values()) > pool_capacity and blurs and _guard < 400:
+    while sum((len(d) + 3 & -4) for d in packed.values()) > pool_capacity and blurs and _guard < 3000:
         _guard += 1
         largest_s = max(blurs.keys(), key = (lambda s: len(packed[s])))
         blurs[largest_s] += 0.5
-        if blurs[largest_s] > 25:
+        if blurs[largest_s] > 40:
             del blurs[largest_s]
             continue
-        packed[largest_s] = encode_sjpg(custom_wallpapers[largest_s], q_idx = 0, blur = blurs[largest_s])
+        packed[largest_s] = encode_sjpg(images[largest_s], q_idx = 0, blur = blurs[largest_s])
     tot = sum((len(d) + 3 & -4) for d in packed.values())
     if not tot <= pool_capacity:
         raise Exception(f'''Wallpapers exceeded pool capacity: {tot} > {pool_capacity}''')
