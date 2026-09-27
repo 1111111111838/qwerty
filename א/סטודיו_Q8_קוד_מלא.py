@@ -2,10 +2,11 @@
 # Studio Q8 - Wallpaper Studio  (single-file build, application code only)
 # Recovered from the packaged executable and repaired to run as ONE module.
 # Intra-app imports removed and aliased below; importlib.reload() removed.
-# Several decompiler-corrupted "if" branches that had become infinite "while"
-# loops were restored (recolor_all_chunks, icon meta, text patch/scan).
-# prepare_slots_pool caches stock re-encodes and bounds blur loops.
-# Deploy errors are written to q8_build_error.log. Marks: "NOTE(recovery)".
+# Decompiler-corrupted "if" branches that became infinite "while" loops were
+# restored; prepare_slots_pool caches stock re-encodes and bounds blur loops;
+# slot 1 falls back to the original image if it cannot fit its 2551-byte region
+# instead of failing the build. Deploy errors -> q8_build_error.log.
+# Marks: "NOTE(recovery)".
 # ============================================================
 
 import sys as _sys
@@ -366,20 +367,32 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
     if 1 in custom_wallpapers and custom_wallpapers[1] is not None:
         val1 = custom_wallpapers[1]
         if isinstance(val1, Image.Image):
-            blur = 0
-            sjpg1 = encode_sjpg(val1, q_idx = 0, blur = blur)
-            # NOTE(recovery): bounded so it cannot loop forever if slot 1 can never
-            # be squeezed under the 2551-byte cap.
-            while len(sjpg1) > 2551 and blur < 30:
-                blur += 0.25
-                sjpg1 = encode_sjpg(val1, q_idx = 0, blur = blur)
+            # NOTE(recovery): slot 1 must fit a fixed 2551-byte region. Blur size
+            # is non-monotonic (it bottoms out then rises), so scan a range and
+            # keep the smallest encoding, stopping as soon as one fits.
+            sjpg1 = encode_sjpg(val1, q_idx = 0, blur = 0)
+            best = sjpg1
+            if len(best) > 2551:
+                blur = 0.0
+                while blur < 60:
+                    blur += 0.5
+                    cand = encode_sjpg(val1, q_idx = 0, blur = blur)
+                    if len(cand) < len(best):
+                        best = cand
+                    if len(cand) <= 2551:
+                        best = cand
+                        break
+                sjpg1 = best
         else:
             sjpg1 = val1
-        if not len(sjpg1) <= 2551:
-            raise Exception(f'''Slot 1 exceeds 2551 bytes: {len(sjpg1)}''')
-        modified[892172:892172 + len(sjpg1)] = sjpg1
-        if len(sjpg1) < 2551:
-            modified[892172 + len(sjpg1):894723] = b'\x00' * (2551 - len(sjpg1))
+        if len(sjpg1) <= 2551:
+            modified[892172:892172 + len(sjpg1)] = sjpg1
+            if len(sjpg1) < 2551:
+                modified[892172 + len(sjpg1):894723] = b'\x00' * (2551 - len(sjpg1))
+        else:
+            # Too detailed to fit slot 1's fixed region even at best compression:
+            # keep the original slot 1 rather than failing the whole build.
+            modified[892172:894723] = orig[892172:894723]
     else:
         modified[892172:894723] = orig[892172:894723]
     
