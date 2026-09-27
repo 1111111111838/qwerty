@@ -1954,7 +1954,14 @@ class Q8WallpaperStudio(tk.Tk):
                 dll_generator.build_and_deploy_dll(diff_table)
                 self.post_ui((lambda : self._on_deploy_success(len(custom_wallpapers))))
             except Exception as e:
-                self.post_ui((lambda err = e: self._on_deploy_error(err)))
+                import traceback
+                tb = traceback.format_exc()
+                try:
+                    with open(os.path.join(BASE_DIR, 'q8_build_error.log'), 'w', encoding = 'utf-8') as _lf:
+                        _lf.write(tb)
+                except Exception:
+                    pass
+                self.post_ui((lambda err = tb: self._on_deploy_error(err)))
                 return None
 
 
@@ -1981,7 +1988,7 @@ class Q8WallpaperStudio(tk.Tk):
         if hasattr(self, 'btn_apply_text_tab'):
             self.btn_apply_text_tab.config(state = 'normal', text = '🚀 החל שינויי טקסט והכן לצריבה בתוכנת WOT')
         self.lbl_status.config(text = '‏שגיאה בבנייה')
-        messagebox.showerror('שגיאה', f'''‏אירעה שגיאה בעת הכנת הגרסה:\n{error}''')
+        messagebox.showerror('שגיאה', f'''‏אירעה שגיאה בעת הכנת הגרסה:\n\n{error}\n\n(נשמר גם בקובץ q8_build_error.log ליד התוכנה)''')
 
 
 if __name__ == '__main__':

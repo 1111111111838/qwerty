@@ -1,12 +1,9 @@
 # ============================================================
-# Studio Q8 - Wallpaper Studio
-# Combined application source (single-file build, application code only)
-#
-# Recovered from the packaged executable and repaired so the file parses,
-# byte-compiles and runs as ONE module. Intra-app imports were removed and the
-# module names aliased below; importlib.reload() calls (no-ops here) removed.
-# The adaptive packing in prepare_slots_pool caches stock re-encodes and bounds
-# every blur loop, so a build completes in seconds instead of hanging.
+# Studio Q8 - Wallpaper Studio  (single-file build, application code only)
+# Recovered from the packaged executable and repaired to run as ONE module.
+# Intra-app imports removed and aliased below; importlib.reload() removed.
+# prepare_slots_pool caches stock re-encodes and bounds blur loops.
+# The deploy worker now writes a full traceback to q8_build_error.log on error.
 # Spots the decompiler corrupted are marked "NOTE(recovery)".
 # ============================================================
 
@@ -228,7 +225,7 @@ Returns list of (abs_offset, size, capacity) for all 69 slots.
 
 def encode_sjpg(im, q_idx = 0, blur = 0):
     '''Encodes an image to compact SJPG using quant table 0 and specified blur.'''
-    # (removed intra-app import: import spd_sjpg — provided by top-level alias)
+    # (removed intra-app import: import spd_sjpg)
     im_c = spd_sjpg.fit_image(im, 240, 320, mode = 'crop')
     if blur > 0:
         im_c = im_c.filter(ImageFilter.GaussianBlur(radius = blur))
@@ -265,7 +262,7 @@ Starts at preferred_start_slot (e.g. 38) where re-encoding stock slots with quan
 frees up over 60,000 bytes, guaranteeing all custom wallpapers fit
 with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
 '''
-    # (removed intra-app import: import spd_sjpg — provided by top-level alias)
+    # (removed intra-app import: import spd_sjpg)
     end_off = 40042980
     start_slot = preferred_start_slot
     # NOTE(recovery): cache each stock slot's q0 re-encode so it is computed once
@@ -355,7 +352,7 @@ Builds patched MMI binary respecting exact user customization choices:
 - Theme colors applied via theme_engine.
 Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
 '''
-    # (removed intra-app import: import theme_engine — provided by top-level alias)
+    # (removed intra-app import: import theme_engine)
     with open(MMI_DUMP_PATH, 'rb') as f:
         orig = f.read()
     if theme_hex is None:
@@ -436,7 +433,7 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
             modified[LIST0_OFFSETS_OFF + qlyx_idx * 4:LIST0_OFFSETS_OFF + (qlyx_idx + 1) * 4] = orig[LIST0_OFFSETS_OFF + orig_idx * 4:LIST0_OFFSETS_OFF + (orig_idx + 1) * 4]
     
     try:
-        # (removed intra-app import: import text_engine — provided by top-level alias)
+        # (removed intra-app import: import text_engine)
         modified = text_engine.apply_text_patches(modified)
     except Exception as e:
         print(f'''Warning: could not apply text patches: {e}''')
@@ -483,8 +480,8 @@ and reconstructs:
 3. Live about title string
 4. Live about body string
 '''
-    # (removed intra-app import: import spd_sjpg — provided by top-level alias)
-    # (removed intra-app import: import text_engine — provided by top-level alias)
+    # (removed intra-app import: import spd_sjpg)
+    # (removed intra-app import: import text_engine)
     with open(MMI_DUMP_PATH, 'rb') as f:
         orig = f.read()
     source_dll = WOT_DLL_PATH if os.path.exists(WOT_DLL_PATH) else CLEAN_REF_DLL
@@ -1178,11 +1175,11 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
-# (removed intra-app import: import spd_sjpg — provided by top-level alias)
-# (removed intra-app import: import mmi_builder — provided by top-level alias)
-# (removed intra-app import: import dll_generator — provided by top-level alias)
-# (removed intra-app import: import theme_engine — provided by top-level alias)
-# (removed intra-app import: import text_engine — provided by top-level alias)
+# (removed intra-app import: import spd_sjpg)
+# (removed intra-app import: import mmi_builder)
+# (removed intra-app import: import dll_generator)
+# (removed intra-app import: import theme_engine)
+# (removed intra-app import: import text_engine)
 ORIG_WP_DIR = os.path.join(BASE_DIR, 'assets', 'orig_wp')
 CUSTOM_WP_DIR = os.path.join(BASE_DIR, 'assets', 'custom_user_wp')
 os.makedirs(CUSTOM_WP_DIR, exist_ok = True)
@@ -3066,9 +3063,9 @@ class Q8WallpaperStudio(tk.Tk):
             
             try:
                 import importlib
-                # (removed importlib.reload(theme_engine) — no-op in single-file build)
-                # (removed importlib.reload(text_engine) — no-op in single-file build)
-                # (removed importlib.reload(mmi_builder) — no-op in single-file build)
+                # (removed importlib.reload(theme_engine))
+                # (removed importlib.reload(text_engine))
+                # (removed importlib.reload(mmi_builder))
                 custom_wallpapers = { }
                 for slot in range(1, TOTAL_WALLPAPERS + 1):
                     item = self.slot_state.get(slot)
@@ -3092,7 +3089,14 @@ class Q8WallpaperStudio(tk.Tk):
                 dll_generator.build_and_deploy_dll(diff_table)
                 self.post_ui((lambda : self._on_deploy_success(len(custom_wallpapers))))
             except Exception as e:
-                self.post_ui((lambda err = e: self._on_deploy_error(err)))
+                import traceback
+                tb = traceback.format_exc()
+                try:
+                    with open(os.path.join(BASE_DIR, 'q8_build_error.log'), 'w', encoding = 'utf-8') as _lf:
+                        _lf.write(tb)
+                except Exception:
+                    pass
+                self.post_ui((lambda err = tb: self._on_deploy_error(err)))
                 return None
 
 
@@ -3119,7 +3123,7 @@ class Q8WallpaperStudio(tk.Tk):
         if hasattr(self, 'btn_apply_text_tab'):
             self.btn_apply_text_tab.config(state = 'normal', text = '🚀 החל שינויי טקסט והכן לצריבה בתוכנת WOT')
         self.lbl_status.config(text = '‏שגיאה בבנייה')
-        messagebox.showerror('שגיאה', f'''‏אירעה שגיאה בעת הכנת הגרסה:\n{error}''')
+        messagebox.showerror('שגיאה', f'''‏אירעה שגיאה בעת הכנת הגרסה:\n\n{error}\n\n(נשמר גם בקובץ q8_build_error.log ליד התוכנה)''')
 
 
 if __name__ == '__main__':
