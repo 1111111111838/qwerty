@@ -2,11 +2,11 @@
 # Studio Q8 - Wallpaper Studio  (single-file build, application code only)
 # Recovered from the packaged executable and repaired to run as ONE module.
 # Intra-app imports removed and aliased below; importlib.reload() removed.
-# Decompiler-corrupted infinite "while" loops restored; prepare_slots_pool
-# caches stock decode/re-encode and, when the pool is tight, lightly blurs the
-# largest slot (custom OR stock) until everything fits; slot 1 falls back to the
-# original if it cannot fit its 2551-byte region. Deploy errors -> q8_build_error.log
-# (writing the DLL under Program Files needs the app run as Administrator).
+# Infinite "while" decompiler artifacts restored; packing caches stock decode
+# and lightly blurs the largest slot to fit tight pools; slot 1 falls back to
+# original if it cannot fit. Re-encoding uses q_idx=2 to match the device stock
+# SJPG format (verified against real device samples). Deploy errors ->
+# q8_build_error.log; writing the DLL under Program Files needs Administrator.
 # Marks: "NOTE(recovery)".
 # ============================================================
 
@@ -226,8 +226,11 @@ Returns list of (abs_offset, size, capacity) for all 69 slots.
     return slots
 
 
-def encode_sjpg(im, q_idx = 0, blur = 0):
-    '''Encodes an image to compact SJPG using quant table 0 and specified blur.'''
+def encode_sjpg(im, q_idx = 2, blur = 0):
+    '''Encodes to SJPG. NOTE(recovery): default q_idx changed 0->2 to match the
+    device stock format (stock slots use q_idx=2 and the recovered quant table
+    is the device index-2 table); encoding at 0 stored a mismatched index and
+    the device decoded it as garbage.'''
     # (removed intra-app import: import spd_sjpg)
     im_c = spd_sjpg.fit_image(im, 240, 320, mode = 'crop')
     if blur > 0:
@@ -246,12 +249,12 @@ def encode_sjpg(im, q_idx = 0, blur = 0):
 
 def encode_slot_sjpg(im, slot):
     '''Helper for single slot encoding with crisp Q0 quality.'''
-    return encode_sjpg(im, q_idx = 0, blur = 0)
+    return encode_sjpg(im, q_idx = 2, blur = 0)
 
 
 def encode_q0(im, blur = 0):
     '''Encodes an image to compact SJPG using quant table 0.'''
-    return encode_sjpg(im, q_idx = 0, blur = blur)
+    return encode_sjpg(im, q_idx = 2, blur = blur)
 
 LIST0_P0 = 1112
 LIST0_INFO_OFF = 1216
@@ -282,7 +285,7 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
         return _stock_img_cache[s]
     def _stock_packed(s):
         if s not in _stock_cache:
-            _stock_cache[s] = encode_sjpg(_stock_image(s), q_idx = 0, blur = 0)
+            _stock_cache[s] = encode_sjpg(_stock_image(s), q_idx = 2, blur = 0)
         return _stock_cache[s]
     while start_slot >= 20:
         start_idx = start_slot - 2
@@ -298,7 +301,7 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
                 if isinstance(val, bytes):
                     packed[s] = val
                     continue
-                packed[s] = encode_sjpg(val, q_idx = 0, blur = 0)
+                packed[s] = encode_sjpg(val, q_idx = 2, blur = 0)
                 continue
             packed[s] = _stock_packed(s)
         tot = sum((len(d) + 3 & -4) for d in packed.values())
@@ -326,7 +329,7 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
                 continue
             images[s] = val
             blurs[s] = 0.0
-            packed[s] = encode_sjpg(val, q_idx = 0, blur = 0)
+            packed[s] = encode_sjpg(val, q_idx = 2, blur = 0)
             continue
         # NOTE(recovery): keep the decoded stock image too, so the fit loop below
         # can lightly blur the largest slot whether it is custom or stock.
@@ -345,7 +348,7 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
         if blurs[largest_s] > 40:
             del blurs[largest_s]
             continue
-        packed[largest_s] = encode_sjpg(images[largest_s], q_idx = 0, blur = blurs[largest_s])
+        packed[largest_s] = encode_sjpg(images[largest_s], q_idx = 2, blur = blurs[largest_s])
     tot = sum((len(d) + 3 & -4) for d in packed.values())
     if not tot <= pool_capacity:
         raise Exception(f'''Wallpapers exceeded pool capacity: {tot} > {pool_capacity}''')
@@ -381,13 +384,13 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
             # NOTE(recovery): slot 1 must fit a fixed 2551-byte region. Blur size
             # is non-monotonic (it bottoms out then rises), so scan a range and
             # keep the smallest encoding, stopping as soon as one fits.
-            sjpg1 = encode_sjpg(val1, q_idx = 0, blur = 0)
+            sjpg1 = encode_sjpg(val1, q_idx = 2, blur = 0)
             best = sjpg1
             if len(best) > 2551:
                 blur = 0.0
                 while blur < 60:
                     blur += 0.5
-                    cand = encode_sjpg(val1, q_idx = 0, blur = blur)
+                    cand = encode_sjpg(val1, q_idx = 2, blur = blur)
                     if len(cand) < len(best):
                         best = cand
                     if len(cand) <= 2551:
@@ -428,7 +431,7 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
         if s in custom_wallpapers and custom_wallpapers[s] is not None:
             val = custom_wallpapers[s]
             if isinstance(val, Image.Image):
-                sjpg = encode_sjpg(val, q_idx = 0, blur = 0)
+                sjpg = encode_sjpg(val, q_idx = 2, blur = 0)
             else:
                 sjpg = val
             if not len(sjpg) <= cap:
