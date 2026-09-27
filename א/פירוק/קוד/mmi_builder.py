@@ -104,6 +104,18 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
     import spd_sjpg
     end_off = 40042980
     start_slot = preferred_start_slot
+    # NOTE(recovery): cache each stock slot's q0 re-encode so it is computed once
+    # instead of on every start_slot pass (was ~10x redundant work -> looked hung).
+    _stock_cache = { }
+    def _stock_packed(s):
+        if s not in _stock_cache:
+            idx = s - 2
+            rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + idx * 4)[0]
+            sz = struct.unpack_from('<I', orig_mmi, INFO_OFF + idx * 12 + 8)[0]
+            abs_p = P40 + rel
+            stock_im = spd_sjpg.sjpg_to_image(orig_mmi[abs_p:abs_p + sz])
+            _stock_cache[s] = encode_sjpg(stock_im, q_idx = 0, blur = 0)
+        return _stock_cache[s]
     while start_slot >= 20:
         start_idx = start_slot - 2
         start_rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + start_idx * 4)[0]
@@ -111,7 +123,6 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
         pool_capacity = end_off - start_off
         packed = { }
         for s in range(start_slot, 71):
-            idx = s - 2
             val = custom_wallpapers.get(s)
             # NOTE(recovery): decompiler emitted `while val:` here; restored to `if/else`
             # (the `while` form would loop forever). Verify against original source.
@@ -121,11 +132,7 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
                     continue
                 packed[s] = encode_sjpg(val, q_idx = 0, blur = 0)
                 continue
-            rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + idx * 4)[0]
-            sz = struct.unpack_from('<I', orig_mmi, INFO_OFF + idx * 12 + 8)[0]
-            abs_p = P40 + rel
-            stock_im = spd_sjpg.sjpg_to_image(orig_mmi[abs_p:abs_p + sz])
-            packed[s] = encode_sjpg(stock_im, q_idx = 0, blur = 0)
+            packed[s] = _stock_packed(s)
         tot = sum((len(d) + 3 & -4) for d in packed.values())
         if tot <= pool_capacity:
             return (start_slot, start_off, packed)
@@ -143,7 +150,6 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
     packed = { }
     blurs = { }
     for s in range(start_slot, 71):
-        idx = s - 2
         val = custom_wallpapers.get(s)
         if val:
             if isinstance(val, bytes):
@@ -152,21 +158,17 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
             blurs[s] = 0.0
             packed[s] = encode_sjpg(val, q_idx = 0, blur = 0)
             continue
-        rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + idx * 4)[0]
-        sz = struct.unpack_from('<I', orig_mmi, INFO_OFF + idx * 12 + 8)[0]
-        abs_p = P40 + rel
-        stock_im = spd_sjpg.sjpg_to_image(orig_mmi[abs_p:abs_p + sz])
-        packed[s] = encode_sjpg(stock_im, q_idx = 0, blur = 0)
+        packed[s] = _stock_packed(s)
     # NOTE(recovery): the original blur-fitting loop was lost in decompilation.
     # This reconstruction is BOUNDED so it can never hang: each slot's blur is
     # capped, exhausted slots are dropped, and a hard guard limits total passes.
     # It fails fast with the capacity error below rather than grinding for hours.
     _guard = 0
-    while sum((len(d) + 3 & -4) for d in packed.values()) > pool_capacity and blurs and _guard < 4000:
+    while sum((len(d) + 3 & -4) for d in packed.values()) > pool_capacity and blurs and _guard < 400:
         _guard += 1
         largest_s = max(blurs.keys(), key = (lambda s: len(packed[s])))
-        blurs[largest_s] += 0.25
-        if blurs[largest_s] > 20:
+        blurs[largest_s] += 0.5
+        if blurs[largest_s] > 25:
             del blurs[largest_s]
             continue
         packed[largest_s] = encode_sjpg(custom_wallpapers[largest_s], q_idx = 0, blur = blurs[largest_s])
@@ -204,8 +206,10 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
         if isinstance(val1, Image.Image):
             blur = 0
             sjpg1 = encode_sjpg(val1, q_idx = 0, blur = blur)
-            while len(sjpg1) > 2551:
-                blur += 0.1
+            # NOTE(recovery): bounded so it cannot loop forever if slot 1 can never
+            # be squeezed under the 2551-byte cap.
+            while len(sjpg1) > 2551 and blur < 30:
+                blur += 0.25
                 sjpg1 = encode_sjpg(val1, q_idx = 0, blur = blur)
         else:
             sjpg1 = val1
