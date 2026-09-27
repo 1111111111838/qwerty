@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - 'א/סטודיו Q8.exe'
+      - '.github/workflows/decompile.yml'
 
 permissions:
   contents: write
