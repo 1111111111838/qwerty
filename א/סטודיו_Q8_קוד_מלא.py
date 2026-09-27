@@ -1,11 +1,23 @@
 # ============================================================
 # Studio Q8 - Wallpaper Studio
-# Combined application source (application modules only)
+# Combined application source (single-file build, application code only)
 #
-# NOTE: recovered via decompilation. Sections marked
-# 'WARNING: Decompyle incomplete' need review against the
-# original source. Standard-library modules were excluded.
+# Recovered from the packaged executable and repaired so the file parses,
+# byte-compiles and imports as ONE module. Because every original module is
+# concatenated here, the intra-app imports (import spd_sjpg, import mmi_builder,
+# ...) were removed and the module names are aliased to this file below, so all
+# cross-references keep working. Spots the decompiler corrupted are marked with
+# "NOTE(recovery)"; verify those against the original source where possible.
 # ============================================================
+
+import sys as _sys
+
+_self = _sys.modules[__name__]
+spd_sjpg = _self
+mmi_builder = _self
+dll_generator = _self
+theme_engine = _self
+text_engine = _self
 
 
 # ============================================================
@@ -19,23 +31,68 @@ Based on official Unisoc quantization tables and Huffman data.
 import io
 import struct
 from PIL import Image, ImageOps, ImageFilter
-JPG_LUM_QUANT_TBL = [
-    [][2][1][1][2][2][4][5][6][1][1][1][2][3][6][6][6][1][1][2][2][4][6][7][6][1][2][2][3][5][9][8][6][2][2][4][6][7][11][10][8][2][4][6][6][8][10][11][9][5][6][8][9][10][12][12][10][7][9][10],
-    [][2][1][1][2][2][4][5][6][1][1][1][2][3][6][6][6][1][1][2][2][4][6][7][6][1][2][2][3][5][9][8][6][2][2][4][6][7][11][10][8][2][4][6][6][8][10][11][9][5][6][8][9][10][12][12][10][7][9][10][10],
-    [][2][1][1][2][2][4][5][6][1][1][1][2][3][6][6][6][1][1][2][2][4][6][7][6][1][2][2][3][5][9][8][6][2][2][4][6][7][11][10][8][2][4][6][6][8][10][11][9][5][6][8][9][10][12][12][10][7][9][10][10][11],
-    [][2][1][1][2][2][4][5][6][1][1][1][2][3][6][6][6][1][1][2][2][4][6][7][6][1][2][2][3][5][9][8][6][2][2][4][6][7][11][10][8][2][4][6][6][8][10][11][9][5][6][8][9][10][12][12][10][7][9][10][10][11][10],
-    [][2][1][1][2][2][4][5][6][1][1][1][2][3][6][6][6][1][1][2][2][4][6][7][6][1][2][2][3][5][9][8][6][2][2][4][6][7][11][10][8][2][4][6][6][8][10][11][9][5][6][8][9][10][12][12][10][7][9][10][10][11][10][10]([][2][1][1][2][2][4][5][6][1][1][1][2][3][6][6][6][1][1][2][2][4][6][7][6][1][2][2][3][5][9][8][6][2][2][4][6][7][11][10][8][2][4][6][6][8][10][11][9][5][6][8][9][10][12][12][10][7][9][10][10][11][10][10][10])]
-JPG_CHR_QUANT_TBL = [
-    [][2][2][2][5][10][10][10][10][2][2][3][7][10][10][10][10][2][3][6][10][10][10][10][10][5][7][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10],
-    [][2][2][2][5][10][10][10][10][2][2][3][7][10][10][10][10][2][3][6][10][10][10][10][10][5][7][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10],
-    [][2][2][2][5][10][10][10][10][2][2][3][7][10][10][10][10][2][3][6][10][10][10][10][10][5][7][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10],
-    [][2][2][2][5][10][10][10][10][2][2][3][7][10][10][10][10][2][3][6][10][10][10][10][10][5][7][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10],
-    [][2][2][2][5][10][10][10][10][2][2][3][7][10][10][10][10][2][3][6][10][10][10][10][10][5][7][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10]([][2][2][2][5][10][10][10][10][2][2][3][7][10][10][10][10][2][3][6][10][10][10][10][10][5][7][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10][10])]
-JPG_HUFF_DATA = [][255][196][1][162][0][0][1][5][1][1][1][1][1][1][0][0][0][0][0][0][0][0][1][2][3][4][5][6][7][8][9][10][11][1][0][3][1][1][1][1][1][1][1][1][1][0][0][0][0][0][0][1][2][3][4][5][6][7][8][9][10][11][16][0][2][1][3][3][2][4][3][5][5][4][4][0][0][1][125][1][2][3][0][4][17][5][18][33][49][65][6][19][81][97][7][34][113][20][50][129][145][161][8][35][66][177][193][21][82][209][240][36][51][98][114][130][9][10][22][23][24][25][26][37][38][39][40][41][42][52][53][54][55][56][57][58][67][68][69][70][71][72][73][74][83][84][85][86][87][88][89][90][99][100][101][102][103][104][105][106][115][116][117][118][119][120][121][122][131][132][133][134][135][136][137][138][146][147][148][149][150][151][152][153][154][162][163][164][165][166][167][168][169][170][178][179][180][181][182][183][184][185][186][194][195][196][197][198][199][200][201][202][210][211][212][213][214][215][216][217][218][225][226][227][228][229][230][231][232][233][234][241][242][243][244][245][246][247][248][249][250][17][0][2][1][2][4][4][3][4][7][5][4][4][0][1][2][119][0][1][2][3][17][4][5][33][49][6][18][65][81][7][97][113][19][34][50][129][8][20][66][145][161][177][193][9][35][51][82][240][21][98][114][209][10][22][36][52][225][37][241][23][24][25][26][38][39][40][41][42][53][54][55][56][57][58][67][68][69][70][71][72][73][74][83][84][85][86][87][88][89][90][99][100][101][102][103][104][105][106][115][116][117][118][119][120][121][122][130][131][132][133][134][135][136][137][138][146][147][148][149][150][151][152][153][154][162][163][164][165][166][167][168][169][170][178][179][180][181][182][183][184][185][186][194][195][196][197][198][199][200][201][202][210][211][212][213][214][215][216][217][218][226][227][228][229][230][231][232][233][234][242][243][244][245][246][247][248][249]([][255][196][1][162][0][0][1][5][1][1][1][1][1][1][0][0][0][0][0][0][0][0][1][2][3][4][5][6][7][8][9][10][11][1][0][3][1][1][1][1][1][1][1][1][1][0][0][0][0][0][0][1][2][3][4][5][6][7][8][9][10][11][16][0][2][1][3][3][2][4][3][5][5][4][4][0][0][1][125][1][2][3][0][4][17][5][18][33][49][65][6][19][81][97][7][34][113][20][50][129][145][161][8][35][66][177][193][21][82][209][240][36][51][98][114][130][9][10][22][23][24][25][26][37][38][39][40][41][42][52][53][54][55][56][57][58][67][68][69][70][71][72][73][74][83][84][85][86][87][88][89][90][99][100][101][102][103][104][105][106][115][116][117][118][119][120][121][122][131][132][133][134][135][136][137][138][146][147][148][149][150][151][152][153][154][162][163][164][165][166][167][168][169][170][178][179][180][181][182][183][184][185][186][194][195][196][197][198][199][200][201][202][210][211][212][213][214][215][216][217][218][225][226][227][228][229][230][231][232][233][234][241][242][243][244][245][246][247][248][249][250][17][0][2][1][2][4][4][3][4][7][5][4][4][0][1][2][119][0][1][2][3][17][4][5][33][49][6][18][65][81][7][97][113][19][34][50][129][8][20][66][145][161][177][193][9][35][51][82][240][21][98][114][209][10][22][36][52][225][37][241][23][24][25][26][38][39][40][41][42][53][54][55][56][57][58][67][68][69][70][71][72][73][74][83][84][85][86][87][88][89][90][99][100][101][102][103][104][105][106][115][116][117][118][119][120][121][122][130][131][132][133][134][135][136][137][138][146][147][148][149][150][151][152][153][154][162][163][164][165][166][167][168][169][170][178][179][180][181][182][183][184][185][186][194][195][196][197][198][199][200][201][202][210][211][212][213][214][215][216][217][218][226][227][228][229][230][231][232][233][234][242][243][244][245][246][247][248][249][250])
-ZZ_INDEX = [][0][1][8][16][9][2][3][10][17][24][32][25][18][11][4][5][12][19][26][33][40][48][41][34][27][20][13][6][7][14][21][28][35][42][49][56][57][50][43][36][29][22][15][23][30][37][44][51][58][59][52][45][38][31][39][46][53][60][61][54][47][55][62][63]
+# NOTE(recovery): the JPEG-style tables below were mangled by the decompiler into
+# chained subscripts. ZZ_INDEX is the exact standard JPEG zig-zag order.
+# JPG_HUFF_DATA is the fully-recovered 420-byte DHT segment. The quant tables
+# were emitted per quality level but only the highest-quality (q_idx=0) table
+# survived complete; the app only ever calls encode with q_idx=0, so every
+# level is populated with that recovered 64-value table. If other quality
+# levels are ever needed, verify these against the original source.
+_LUM_Q0 = [
+        2, 1, 1, 2, 2, 4, 5, 6, 1, 1, 1, 2, 3, 6, 6, 6,
+        1, 1, 2, 2, 4, 6, 7, 6, 1, 2, 2, 3, 5, 9, 8, 6,
+        2, 2, 4, 6, 7, 11, 10, 8, 2, 4, 6, 6, 8, 10, 11, 9,
+        5, 6, 8, 9, 10, 12, 12, 10, 7, 9, 10, 10, 11, 10, 10, 10,
+]
+_CHR_Q0 = [
+        2, 2, 2, 5, 10, 10, 10, 10, 2, 2, 3, 7, 10, 10, 10, 10,
+        2, 3, 6, 10, 10, 10, 10, 10, 5, 7, 10, 10, 10, 10, 10, 10,
+        10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+        10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+]
+JPG_LUM_QUANT_TBL = [list(_LUM_Q0) for _ in range(5)]
+JPG_CHR_QUANT_TBL = [list(_CHR_Q0) for _ in range(5)]
+JPG_HUFF_DATA = [
+        255, 196, 1, 162, 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0,
+        0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+        11, 1, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+        0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 0,
+        2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125, 1,
+        2, 3, 0, 4, 17, 5, 18, 33, 49, 65, 6, 19, 81, 97, 7, 34,
+        113, 20, 50, 129, 145, 161, 8, 35, 66, 177, 193, 21, 82, 209, 240, 36,
+        51, 98, 114, 130, 9, 10, 22, 23, 24, 25, 26, 37, 38, 39, 40, 41,
+        42, 52, 53, 54, 55, 56, 57, 58, 67, 68, 69, 70, 71, 72, 73, 74,
+        83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104, 105, 106,
+        115, 116, 117, 118, 119, 120, 121, 122, 131, 132, 133, 134, 135, 136, 137, 138,
+        146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168,
+        169, 170, 178, 179, 180, 181, 182, 183, 184, 185, 186, 194, 195, 196, 197, 198,
+        199, 200, 201, 202, 210, 211, 212, 213, 214, 215, 216, 217, 218, 225, 226, 227,
+        228, 229, 230, 231, 232, 233, 234, 241, 242, 243, 244, 245, 246, 247, 248, 249,
+        250, 17, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1,
+        2, 119, 0, 1, 2, 3, 17, 4, 5, 33, 49, 6, 18, 65, 81, 7,
+        97, 113, 19, 34, 50, 129, 8, 20, 66, 145, 161, 177, 193, 9, 35, 51,
+        82, 240, 21, 98, 114, 209, 10, 22, 36, 52, 225, 37, 241, 23, 24, 25,
+        26, 38, 39, 40, 41, 42, 53, 54, 55, 56, 57, 58, 67, 68, 69, 70,
+        71, 72, 73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102,
+        103, 104, 105, 106, 115, 116, 117, 118, 119, 120, 121, 122, 130, 131, 132, 133,
+        134, 135, 136, 137, 138, 146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163,
+        164, 165, 166, 167, 168, 169, 170, 178, 179, 180, 181, 182, 183, 184, 185, 186,
+        194, 195, 196, 197, 198, 199, 200, 201, 202, 210, 211, 212, 213, 214, 215, 216,
+        217, 218, 226, 227, 228, 229, 230, 231, 232, 233, 234, 242, 243, 244, 245, 246,
+        247, 248, 249, 250,
+]
+ZZ_INDEX = [
+        0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5,
+        12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
+        35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+        58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+]
 
 def zz_order(data):
-    return None(x)
+    # NOTE(recovery): decompiler emitted `return None(x)`; reconstructed as the
+    # zig-zag reordering implied by ZZ_INDEX. Returns bytes because callers
+    # concatenate the result with byte strings. Verify against original source.
+    return bytes(data[i] for i in ZZ_INDEX)
 
 
 def sjpg_to_jpg(sjpg_data):
@@ -127,8 +184,10 @@ if getattr(sys, 'frozen', False):
             BASE_DIR = _internal
         else:
             BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    # NOTE(recovery): this else belongs to `if frozen` (decompiler mis-nested it);
+    # without it BASE_DIR was undefined when run as a plain .py.
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRATCH_DIR = os.path.dirname(BASE_DIR)
 
 def _find_asset(name):
@@ -169,7 +228,7 @@ Returns list of (abs_offset, size, capacity) for all 69 slots.
 
 def encode_sjpg(im, q_idx = 0, blur = 0):
     '''Encodes an image to compact SJPG using quant table 0 and specified blur.'''
-    import spd_sjpg
+    # (removed intra-app import: import spd_sjpg — provided by top-level alias)
     im_c = spd_sjpg.fit_image(im, 240, 320, mode = 'crop')
     if blur > 0:
         im_c = im_c.filter(ImageFilter.GaussianBlur(radius = blur))
@@ -197,7 +256,7 @@ def encode_q0(im, blur = 0):
 LIST0_P0 = 1112
 LIST0_INFO_OFF = 1216
 LIST0_OFFSETS_OFF = 10036
-UNISOC_ICON_MAPPING = [][(227, 222)][(228, 274)][(229, 226)][(230, 283)][(231, 212)][(232, 278)][(233, 265)][(234, 286)][(235, 301)][(236, 270)][(237, 295)][(238, 275)][(239, 202)][(240, 271)][(241, 203)][(242, 273)][(243, 217)][(244, 285)][(245, 219)][(246, 287)][(247, 207)][(248, 272)][(249, 200)][(250, 280)][(251, 201)][(252, 269)][(253, 224)][(254, 292)][(255, 216)][(256, 284)][(257, 264)][(258, 268)][(259, 220)][(260, 276)][(261, 210)][(262, 277)]
+UNISOC_ICON_MAPPING = [(227, 222), (228, 274), (229, 226), (230, 283), (231, 212), (232, 278), (233, 265), (234, 286), (235, 301), (236, 270), (237, 295), (238, 275), (239, 202), (240, 271), (241, 203), (242, 273), (243, 217), (244, 285), (245, 219), (246, 287), (247, 207), (248, 272), (249, 200), (250, 280), (251, 201), (252, 269), (253, 224), (254, 292), (255, 216), (256, 284), (257, 264), (258, 268), (259, 220), (260, 276), (261, 210), (262, 277)]
 
 def prepare_slots_pool(custom_wallpapers, orig_mmi, preferred_start_slot = 38):
     '''
@@ -206,7 +265,7 @@ Starts at preferred_start_slot (e.g. 38) where re-encoding stock slots with quan
 frees up over 60,000 bytes, guaranteeing all custom wallpapers fit
 with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
 '''
-    import spd_sjpg
+    # (removed intra-app import: import spd_sjpg — provided by top-level alias)
     end_off = 40042980
     start_slot = preferred_start_slot
     while start_slot >= 20:
@@ -218,18 +277,20 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
         for s in range(start_slot, 71):
             idx = s - 2
             val = custom_wallpapers.get(s)
-            while val:
+            # NOTE(recovery): decompiler emitted `while val:` here; restored to `if/else`
+            # (the `while` form would loop forever). Verify against original source.
+            if val:
                 if isinstance(val, bytes):
                     packed[s] = val
                     continue
                 packed[s] = encode_sjpg(val, q_idx = 0, blur = 0)
+                continue
             rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + idx * 4)[0]
             sz = struct.unpack_from('<I', orig_mmi, INFO_OFF + idx * 12 + 8)[0]
             abs_p = P40 + rel
             stock_im = spd_sjpg.sjpg_to_image(orig_mmi[abs_p:abs_p + sz])
             packed[s] = encode_sjpg(stock_im, q_idx = 0, blur = 0)
-        tot = (lambda .0: for d in .0:
-len(d) + 3 & -4.0)(packed.values()())
+        tot = sum((len(d) + 3 & -4) for d in packed.values())
         if tot <= pool_capacity:
             return (start_slot, start_off, packed)
         start_slot -= 2
@@ -238,36 +299,41 @@ len(d) + 3 & -4.0)(packed.values()())
     start_rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + start_idx * 4)[0]
     start_off = P40 + start_rel
     pool_capacity = end_off - start_off
-    
-    try:
-        for s in range(start_slot, 71):
-            while not s in custom_wallpapers:
-                pass
-            if isinstance(custom_wallpapers[s], bytes):
+    # NOTE(recovery): the fallback packing block below was heavily corrupted by the
+    # decompiler (lost control flow: bare `try`, `while not ... : pass`, `s = sum`).
+    # Reconstructed from context/intent: re-pack the widest pool, then progressively
+    # add blur to the largest custom wallpaper until everything fits. VERIFY against
+    # the original source before treating this branch as authoritative.
+    packed = { }
+    blurs = { }
+    for s in range(start_slot, 71):
+        idx = s - 2
+        val = custom_wallpapers.get(s)
+        if val:
+            if isinstance(val, bytes):
+                packed[s] = val
                 continue
-    s = sum
-
-    blurs = s
-    s = sum
-    if (lambda .0: for d in .0:
-len(d) + 3 & -4.0)(packed.values()()) > pool_capacity and blurs:
+            blurs[s] = 0.0
+            packed[s] = encode_sjpg(val, q_idx = 0, blur = 0)
+            continue
+        rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + idx * 4)[0]
+        sz = struct.unpack_from('<I', orig_mmi, INFO_OFF + idx * 12 + 8)[0]
+        abs_p = P40 + rel
+        stock_im = spd_sjpg.sjpg_to_image(orig_mmi[abs_p:abs_p + sz])
+        packed[s] = encode_sjpg(stock_im, q_idx = 0, blur = 0)
+    while sum((len(d) + 3 & -4) for d in packed.values()) > pool_capacity and blurs:
         largest_s = max(blurs.keys(), key = (lambda s: len(packed[s])))
         blurs[largest_s] += 0.05
         packed[largest_s] = encode_sjpg(custom_wallpapers[largest_s], q_idx = 0, blur = blurs[largest_s])
-    tot = (lambda .0: for d in .0:
-len(d) + 3 & -4.0)(packed.values()())
+    tot = sum((len(d) + 3 & -4) for d in packed.values())
     if not tot <= pool_capacity:
-        raise f'''Wallpapers exceeded pool capacity: {tot} > {pool_capacity}'''()
+        raise Exception(f'''Wallpapers exceeded pool capacity: {tot} > {pool_capacity}''')
     return (start_slot, start_off, packed)
 
 
 def prepare_slots_61_70(slot_inputs, orig_mmi):
     '''Compatibility wrapper redirecting to prepare_slots_pool.'''
-    ()
-    _ = None
-    packed = prepare_slots_pool(slot_inputs, orig_mmi, preferred_start_slot = 38)
-    return None
-# WARNING: Decompyle incomplete
+    return prepare_slots_pool(slot_inputs, orig_mmi, preferred_start_slot = 38)
 
 
 def build_modified_mmi(custom_wallpapers, theme_hex = None, use_unisoc_icons = False):
@@ -278,7 +344,7 @@ Builds patched MMI binary respecting exact user customization choices:
 - Theme colors applied via theme_engine.
 Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
 '''
-    import theme_engine
+    # (removed intra-app import: import theme_engine — provided by top-level alias)
     with open(MMI_DUMP_PATH, 'rb') as f:
         orig = f.read()
     if theme_hex is None:
@@ -299,23 +365,16 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
         else:
             sjpg1 = val1
         if not len(sjpg1) <= 2551:
-            raise f'''Slot 1 exceeds 2551 bytes: {len(sjpg1)}'''()
+            raise Exception(f'''Slot 1 exceeds 2551 bytes: {len(sjpg1)}''')
         modified[892172:892172 + len(sjpg1)] = sjpg1
         if len(sjpg1) < 2551:
             modified[892172 + len(sjpg1):894723] = b'\x00' * (2551 - len(sjpg1))
     else:
         modified[892172:894723] = orig[892172:894723]
     
-    try:
-        for s in custom_wallpapers.keys():
-            while not s >= 2:
-                pass
-            while custom_wallpapers[s]:
-                pass
-    s = None
-
-    custom_slots = []
-    s = s
+    # NOTE(recovery): decompiler corrupted this into bare `try`/`while ...: pass`.
+    # Reconstructed as the list of slots (>= 2) that carry a real custom wallpaper.
+    custom_slots = [s for s in custom_wallpapers.keys() if s >= 2 and custom_wallpapers[s]]
     min_custom_slot = min(custom_slots) if custom_slots else 70
     preferred_start = 38
     if min_custom_slot < 38:
@@ -338,7 +397,7 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
             else:
                 sjpg = val
             if not len(sjpg) <= cap:
-                raise f'''Slot {s} exceeds capacity {cap}: {len(sjpg)}'''()
+                raise Exception(f'''Slot {s} exceeds capacity {cap}: {len(sjpg)}''')
             modified[abs_off:abs_off + len(sjpg)] = sjpg
             struct.pack_into('<HHII', modified, INFO_OFF + idx * 12, 240, 320, 522, len(sjpg))
             struct.pack_into('<I', modified, OFFSETS_OFF + idx * 4, abs_off - P40)
@@ -355,7 +414,7 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
         struct.pack_into('<I', modified, OFFSETS_OFF + idx * 4, curr_off - P40)
         curr_off = curr_off + len(data) + 3 & -4
     if not curr_off <= 40042980:
-        raise f'''CRITICAL: Slots overflowed pool: 0x{curr_off:X} > 0x26301E4'''()
+        raise Exception(f'''CRITICAL: Slots overflowed pool: 0x{curr_off:X} > 0x26301E4''')
     if curr_off < 40042980:
         modified[curr_off:40042980] = b'\x00' * (40042980 - curr_off)
     if use_unisoc_icons:
@@ -364,52 +423,42 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
             modified[LIST0_OFFSETS_OFF + qlyx_idx * 4:LIST0_OFFSETS_OFF + (qlyx_idx + 1) * 4] = orig[LIST0_OFFSETS_OFF + orig_idx * 4:LIST0_OFFSETS_OFF + (orig_idx + 1) * 4]
     
     try:
-        import text_engine
+        # (removed intra-app import: import text_engine — provided by top-level alias)
         modified = text_engine.apply_text_patches(modified)
     except Exception as e:
         print(f'''Warning: could not apply text patches: {e}''')
 
     return (bytes(orig), bytes(modified))
-# WARNING: Decompyle incomplete
 
 
 def generate_diff_table(orig, modified, max_gap = 64):
     '''Generates contiguous diff chunks between original and modified binaries.'''
-    
-    try:
-        for i in range(len(orig)):
-            while not orig[i] != modified[i]:
-                pass
-    i = None
-
-    diff_indices = []
-    i = i
+    # NOTE(recovery): decompiler corrupted the diff scan and grouping into bare
+    # `try`/`while ...: pass`. Reconstructed from intent; verify against original.
+    diff_indices = [i for i in range(len(orig)) if orig[i] != modified[i]]
     if not diff_indices:
         return bytearray(struct.pack('<I', 0))
     chunks = []
     start = diff_indices[0]
     prev = diff_indices[0]
     for d in diff_indices[slice(1, None, None)]:
-        while d - prev <= max_gap:
+        if d - prev <= max_gap:
             prev = d
-        chunks.append((start, (prev - start) + 1))
-        start = d
-        prev = d
+        else:
+            chunks.append((start, (prev - start) + 1))
+            start = d
+            prev = d
     chunks.append((start, (prev - start) + 1))
     for start, length in chunks:
-        while 39317504 <= start:
-            if not start <= 40043776:
+        if 39317504 <= start <= 40043776:
+            if start + length <= 40042980:
                 continue
-        chunks
-        if start + length <= 40042980:
-            continue
-        raise f'''CRITICAL: Wallpaper chunk at 0x{start:X} exceeded pool (0x{start + length:X} > 0x26301E4)'''()
+            raise Exception(f'''CRITICAL: Wallpaper chunk at 0x{start:X} exceeded pool (0x{start + length:X} > 0x26301E4)''')
     diff_table = bytearray(struct.pack('<I', len(chunks)))
     for start, length in chunks:
         diff_table.extend(struct.pack('<II', start, length))
         diff_table.extend(modified[start:start + length])
     return diff_table
-# WARNING: Decompyle incomplete
 
 
 def load_live_wot_state():
@@ -421,8 +470,8 @@ and reconstructs:
 3. Live about title string
 4. Live about body string
 '''
-    import spd_sjpg
-    import text_engine
+    # (removed intra-app import: import spd_sjpg — provided by top-level alias)
+    # (removed intra-app import: import text_engine — provided by top-level alias)
     with open(MMI_DUMP_PATH, 'rb') as f:
         orig = f.read()
     source_dll = WOT_DLL_PATH if os.path.exists(WOT_DLL_PATH) else CLEAN_REF_DLL
@@ -514,8 +563,10 @@ if getattr(sys, 'frozen', False):
             BASE_DIR = _internal
         else:
             BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    # NOTE(recovery): this else belongs to `if frozen` (decompiler mis-nested it);
+    # without it BASE_DIR was undefined when run as a plain .py.
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRATCH_DIR = os.path.dirname(BASE_DIR)
 
 def _find_asset(name):
@@ -576,8 +627,10 @@ Returns status message.
         ref_data = f.read()
     hook_header = bytearray(ref_data[slice(3629568, 3631104, None)])
     if not len(hook_header) == 1536:
-        raise f'''Expected 0x600 header, got {len(hook_header)}'''()
-    clean_loop = [][81][139][22][139][78][4][131][198][8][87][1][215][243][164][95][89][73][117][237][144][144][144][144][144][144][91][95][94][90][89][88][93]([][81][139][22][139][78][4][131][198][8][87][1][215][243][164][95][89][73][117][237][144][144][144][144][144][144][91][95][94][90][89][88][93][195])
+        raise Exception(f'''Expected 0x600 header, got {len(hook_header)}''')
+    # NOTE(recovery): decompiler mangled this byte literal into chained subscripts.
+    # Restored to the 33-byte sequence written into hook_header[157:190].
+    clean_loop = bytes([81, 139, 22, 139, 78, 4, 131, 198, 8, 87, 1, 215, 243, 164, 95, 89, 73, 117, 237, 144, 144, 144, 144, 144, 144, 91, 95, 94, 90, 89, 88, 93, 195])
     hook_header[157:190] = clean_loop
     patch_data = bytearray(new_rawsize)
     patch_data[slice(None, 1536, None)] = hook_header
@@ -621,8 +674,10 @@ if getattr(sys, 'frozen', False):
             BASE_DIR = _internal
         else:
             BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    # NOTE(recovery): this else belongs to `if frozen` (decompiler mis-nested it);
+    # without it BASE_DIR was undefined when run as a plain .py.
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRATCH_DIR = os.path.dirname(BASE_DIR)
 
 def _find_asset(name):
@@ -689,18 +744,8 @@ def hex_to_rgb(hex_str):
     '''#'''
     h = hex_str.lstrip('#')
     if len(h) == 3:
-        h = (lambda .0: for c in .0:
-c * 2.0)(h())
-    if tuple is tuple:
-        tuple
-        for None in (0, 2, 4)():
-            pass
-        # unsupported CALL_INTRINSIC_1 6
-        return (lambda .0: for i in .0:
-int(h[i:i + 2], 16).0)
-    return (lambda .0: for i in .0:
-int(h[i:i + 2], 16).0)((0, 2, 4)())
-# WARNING: Decompyle incomplete
+        h = ''.join(c * 2 for c in h)
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
 def rgb_to_hex(r, g, b):
@@ -936,8 +981,10 @@ if getattr(sys, 'frozen', False):
             BASE_DIR = _internal
         else:
             BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    # NOTE(recovery): this else belongs to `if frozen` (decompiler mis-nested it);
+    # without it BASE_DIR was undefined when run as a plain .py.
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRATCH_DIR = os.path.dirname(BASE_DIR)
 
 def _find_asset(name):
@@ -1112,15 +1159,17 @@ if getattr(sys, 'frozen', False):
             BASE_DIR = _internal
         else:
             BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    # NOTE(recovery): this else belongs to `if frozen` (decompiler mis-nested it);
+    # without it BASE_DIR was undefined when run as a plain .py.
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
-import spd_sjpg
-import mmi_builder
-import dll_generator
-import theme_engine
-import text_engine
+# (removed intra-app import: import spd_sjpg — provided by top-level alias)
+# (removed intra-app import: import mmi_builder — provided by top-level alias)
+# (removed intra-app import: import dll_generator — provided by top-level alias)
+# (removed intra-app import: import theme_engine — provided by top-level alias)
+# (removed intra-app import: import text_engine — provided by top-level alias)
 ORIG_WP_DIR = os.path.join(BASE_DIR, 'assets', 'orig_wp')
 CUSTOM_WP_DIR = os.path.join(BASE_DIR, 'assets', 'custom_user_wp')
 os.makedirs(CUSTOM_WP_DIR, exist_ok = True)
@@ -1149,8 +1198,7 @@ Full 2x HD Zoom preview modal (480x640) for inspecting fine wallpaper details.
     
     def __init__(self, parent, image, slot_num):
         '''תצוגת HD מוגדלת פי 2 (480x640) - טפט #'''
-        # unsupported opcode LOAD_SUPER_ATTR
-        self(parent)
+        super().__init__(parent)
         self.title(f'''תצוגת HD מוגדלת פי 2 (480x640) - טפט #{slot_num}''')
         self.geometry('520x750')
         self.resizable(False, False)
@@ -1167,7 +1215,6 @@ Full 2x HD Zoom preview modal (480x640) for inspecting fine wallpaper details.
         btn_close = tk.Button(self, text = 'סגור חלון', font = ('Segoe UI', 10, 'bold'), bg = '#3d405b', fg = '#ffffff', activebackground = '#2b2d42', activeforeground = '#ffffff', relief = 'flat', padx = 20, pady = 6, cursor = 'hand2', command = self.destroy)
         btn_close.pack(pady = (8, 12))
         return None
-    # WARNING: Decompyle incomplete
 
 
 
@@ -1179,8 +1226,7 @@ Displays 1:1 native 240x320 preview for maximum clarity.
     
     def __init__(self, parent, image_path, slot_num):
         '''התאמת תמונה - טפט #'''
-        # unsupported opcode LOAD_SUPER_ATTR
-        self(parent)
+        super().__init__(parent)
         self.title(f'''התאמת תמונה - טפט #{slot_num}''')
         self.geometry('460x650')
         self.resizable(False, False)
@@ -1194,7 +1240,6 @@ Displays 1:1 native 240x320 preview for maximum clarity.
         self._build_ui()
         self._update_preview()
         return None
-    # WARNING: Decompyle incomplete
 
     
     def _build_ui(self):
@@ -1250,8 +1295,7 @@ Shows side-by-side previews of Slot A and Slot B with real-time live updates.
     
     def __init__(self, parent, initial_slot_a = 1, initial_slot_b = None):
         '''⇄ החלפת מיקומים בין טפטים'''
-        # unsupported opcode LOAD_SUPER_ATTR
-        self(parent)
+        super().__init__(parent)
         self.parent = parent
         self.title('⇄ החלפת מיקומים בין טפטים')
         self.geometry('540x510')
@@ -1271,7 +1315,6 @@ Shows side-by-side previews of Slot A and Slot B with real-time live updates.
         self._build_ui()
         self._update_views()
         return None
-    # WARNING: Decompyle incomplete
 
     
     def _build_ui(self):
@@ -1385,8 +1428,7 @@ and copyright credit to @מה-זה-משנה-אה.
 '''
     
     def __init__(self, parent, duration_ms = 2800):
-        # unsupported opcode LOAD_SUPER_ATTR
-        self(parent)
+        super().__init__(parent)
         self.overrideredirect(True)
         self.configure(bg = '#06d6a0')
         splash_w = 600
@@ -1426,7 +1468,6 @@ and copyright credit to @מה-זה-משנה-אה.
         self.bind('<Key>', (lambda e: self._dismiss()))
         self.after(duration_ms, self._dismiss)
         return None
-    # WARNING: Decompyle incomplete
 
     
     def _dismiss(self):
@@ -1443,8 +1484,7 @@ class Q8WallpaperStudio(tk.Tk):
     
     def __init__(self):
         '''סטודיו לQ8'''
-        # unsupported opcode LOAD_SUPER_ATTR
-        self()
+        super().__init__()
         self.title('סטודיו לQ8')
         self.geometry('1280x860')
         self.minsize(980, 680)
@@ -1522,7 +1562,6 @@ class Q8WallpaperStudio(tk.Tk):
             return None
 
         return None
-    # WARNING: Decompyle incomplete
 
     
     def post_ui(self, func):
@@ -1598,8 +1637,8 @@ class Q8WallpaperStudio(tk.Tk):
         if hasattr(self, 'text_frame'):
             self.text_frame.pack_forget()
         for btn in (getattr(self, 'btn_tab_wp', None), getattr(self, 'btn_tab_theme', None), getattr(self, 'btn_tab_text', None)):
-            while not btn:
-                pass
+            if not btn:
+                continue
             btn.config(bg = '#252830', fg = '#adb5bd', font = ('Segoe UI', 11))
         if tab_name == 'wallpapers':
             self.wallpaper_frame.pack(fill = 'both', expand = True, padx = 12, pady = 8)
@@ -1763,23 +1802,25 @@ class Q8WallpaperStudio(tk.Tk):
         slider_frame.pack(side = 'right', padx = (0, 14))
         lbl_slider_title = tk.Label(slider_frame, text = 'בהירות', font = ('Segoe UI', 8, 'bold'), fg = '#adb5bd', bg = '#21242b')
         lbl_slider_title.pack(anchor = 'center')
-        self.slider_brightness = (slider_frame,)(*{
-            'from_': 100,
-            'to': 25,
-            'orient': 'vertical',
-            'resolution': 1,
-            'showvalue': 0,
-            'length': 100,
-            'width': 14,
-            'sliderlength': 18,
-            'bg': '#21242b',
-            'fg': '#ffffff',
-            'troughcolor': '#181a1f',
-            'activebackground': '#06d6a0',
-            'highlightthickness': 0,
-            'bd': 0,
-            'cursor': 'hand2',
-            'command': self._on_slider_change })
+        # NOTE(recovery): decompiler mangled this widget construction into
+        # `(slider_frame,)(*{...})`; reconstructed as a tk.Scale call.
+        self.slider_brightness = tk.Scale(slider_frame,
+            from_ = 100,
+            to = 25,
+            orient = 'vertical',
+            resolution = 1,
+            showvalue = 0,
+            length = 100,
+            width = 14,
+            sliderlength = 18,
+            bg = '#21242b',
+            fg = '#ffffff',
+            troughcolor = '#181a1f',
+            activebackground = '#06d6a0',
+            highlightthickness = 0,
+            bd = 0,
+            cursor = 'hand2',
+            command = self._on_slider_change)
         self.slider_brightness.set(int(round(self.current_v * 100)))
         self.slider_brightness.pack(pady = 4)
         self.slider_brightness.bind('<ButtonRelease-1>', (lambda e: self.preview_theme(self._pending_theme_hex or self.current_theme_hex, 'מותאם אישית')))
@@ -2369,21 +2410,24 @@ class Q8WallpaperStudio(tk.Tk):
         lines = []
         for paragraph in body.split('\n'):
             p = paragraph.strip()
-            while not p:
-                pass
+            if not p:
+                continue
             p_norm = p.replace('לשכפל ו/או', 'לשכפל ו /או')
             words = p_norm.split(' ')
             cur = ''
             for w in words:
-                while not w:
-                    pass
-                while '@' in w and '-' in w and len(w) > 14:
+                if not w:
+                    continue
+                # NOTE(recovery): decompiler rendered the next branch as `while`;
+                # restored to `if` (long hyphenated email word split across lines).
+                if '@' in w and '-' in w and len(w) > 14:
                     if cur:
                         lines.append(cur)
                         cur = ''
                     parts = w.split('-')
                     lines.append(parts[0] + '-')
                     lines.append('-'.join(parts[slice(1, None, None)]))
+                    continue
                 test = (cur + ' ' + w).strip() if cur else w
                 if len(test) <= 23:
                     cur = test
@@ -2397,8 +2441,8 @@ class Q8WallpaperStudio(tk.Tk):
         y = 98
         for line in lines:
             line_clean = line.strip()
-            while not line_clean:
-                pass
+            if not line_clean:
+                continue
             is_email = '@' in line_clean or 'tech.com' in line_clean
             if is_email:
                 color = '#2D5FB2'
@@ -2463,7 +2507,8 @@ class Q8WallpaperStudio(tk.Tk):
         if not query:
             return None
         self.lbl_status.config(text = f'''מחפש \'{query}\' במכשיר...''')
-        self.tree_strings.get_children()()
+        # NOTE(recovery): decompiler left `get_children()()`; restored to clearing the tree.
+        self.tree_strings.delete(*self.tree_strings.get_children())
         results = text_engine.search_hebrew_strings(query)
         if not results:
             self.lbl_status.config(text = f'''לא נמצאו מילים תואמות ל-\'{query}\'.''')
@@ -2860,12 +2905,12 @@ class Q8WallpaperStudio(tk.Tk):
         elif is_custom:
             pass
         
-        '#06d6a0'('#343a40', fill = 3, outline = 2, width = 1)
+        # NOTE(recovery): decompiler lost this canvas call (target + args corrupted);
+        # verify against original source. Neutralized so it is a no-op instead of a crash.
+        # '#06d6a0'('#343a40', fill = 3, outline = 2, width = 1)
         self.canvas.itemconfig(f'''btn_rst_bg_{slot}''', fill = '#5c2429' if is_custom else '#252830')
         self.canvas.itemconfig(f'''btn_rst_txt_{slot}''', fill = '#ff6b6b' if is_custom else '#495057')
-        custom_count = (lambda .0: for s in .0:
-if not self.slot_state.get(s, { }).get('is_custom'):
-continue1.0)(range(1, TOTAL_WALLPAPERS + 1)())
+        custom_count = sum(1 for s in range(1, TOTAL_WALLPAPERS + 1) if self.slot_state.get(s, { }).get('is_custom'))
         self.lbl_count.configure(text = f'''מותאמים אישית: {custom_count} / {TOTAL_WALLPAPERS}''')
         if slot == self.selected_slot:
             self._update_hd_preview()

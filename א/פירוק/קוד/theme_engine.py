@@ -26,8 +26,10 @@ if getattr(sys, 'frozen', False):
             BASE_DIR = _internal
         else:
             BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    # NOTE(recovery): this else belongs to `if frozen` (decompiler mis-nested it);
+    # without it BASE_DIR was undefined when run as a plain .py.
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRATCH_DIR = os.path.dirname(BASE_DIR)
 
 def _find_asset(name):
@@ -94,18 +96,8 @@ def hex_to_rgb(hex_str):
     '''#'''
     h = hex_str.lstrip('#')
     if len(h) == 3:
-        h = (lambda .0: for c in .0:
-c * 2.0)(h())
-    if tuple is tuple:
-        tuple
-        for None in (0, 2, 4)():
-            pass
-        # unsupported CALL_INTRINSIC_1 6
-        return (lambda .0: for i in .0:
-int(h[i:i + 2], 16).0)
-    return (lambda .0: for i in .0:
-int(h[i:i + 2], 16).0)((0, 2, 4)())
-# WARNING: Decompyle incomplete
+        h = ''.join(c * 2 for c in h)
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
 def rgb_to_hex(r, g, b):

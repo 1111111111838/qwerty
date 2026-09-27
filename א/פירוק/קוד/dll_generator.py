@@ -15,8 +15,10 @@ if getattr(sys, 'frozen', False):
             BASE_DIR = _internal
         else:
             BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    # NOTE(recovery): this else belongs to `if frozen` (decompiler mis-nested it);
+    # without it BASE_DIR was undefined when run as a plain .py.
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRATCH_DIR = os.path.dirname(BASE_DIR)
 
 def _find_asset(name):
@@ -77,8 +79,10 @@ Returns status message.
         ref_data = f.read()
     hook_header = bytearray(ref_data[slice(3629568, 3631104, None)])
     if not len(hook_header) == 1536:
-        raise f'''Expected 0x600 header, got {len(hook_header)}'''()
-    clean_loop = [][81][139][22][139][78][4][131][198][8][87][1][215][243][164][95][89][73][117][237][144][144][144][144][144][144][91][95][94][90][89][88][93]([][81][139][22][139][78][4][131][198][8][87][1][215][243][164][95][89][73][117][237][144][144][144][144][144][144][91][95][94][90][89][88][93][195])
+        raise Exception(f'''Expected 0x600 header, got {len(hook_header)}''')
+    # NOTE(recovery): decompiler mangled this byte literal into chained subscripts.
+    # Restored to the 33-byte sequence written into hook_header[157:190].
+    clean_loop = bytes([81, 139, 22, 139, 78, 4, 131, 198, 8, 87, 1, 215, 243, 164, 95, 89, 73, 117, 237, 144, 144, 144, 144, 144, 144, 91, 95, 94, 90, 89, 88, 93, 195])
     hook_header[157:190] = clean_loop
     patch_data = bytearray(new_rawsize)
     patch_data[slice(None, 1536, None)] = hook_header

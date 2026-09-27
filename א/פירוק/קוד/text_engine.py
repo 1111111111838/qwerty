@@ -19,8 +19,10 @@ if getattr(sys, 'frozen', False):
             BASE_DIR = _internal
         else:
             BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    # NOTE(recovery): this else belongs to `if frozen` (decompiler mis-nested it);
+    # without it BASE_DIR was undefined when run as a plain .py.
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRATCH_DIR = os.path.dirname(BASE_DIR)
 
 def _find_asset(name):

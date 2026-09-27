@@ -20,8 +20,10 @@ if getattr(sys, 'frozen', False):
             BASE_DIR = _internal
         else:
             BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    # NOTE(recovery): this else belongs to `if frozen` (decompiler mis-nested it);
+    # without it BASE_DIR was undefined when run as a plain .py.
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRATCH_DIR = os.path.dirname(BASE_DIR)
 
 def _find_asset(name):
@@ -90,7 +92,7 @@ def encode_q0(im, blur = 0):
 LIST0_P0 = 1112
 LIST0_INFO_OFF = 1216
 LIST0_OFFSETS_OFF = 10036
-UNISOC_ICON_MAPPING = [][(227, 222)][(228, 274)][(229, 226)][(230, 283)][(231, 212)][(232, 278)][(233, 265)][(234, 286)][(235, 301)][(236, 270)][(237, 295)][(238, 275)][(239, 202)][(240, 271)][(241, 203)][(242, 273)][(243, 217)][(244, 285)][(245, 219)][(246, 287)][(247, 207)][(248, 272)][(249, 200)][(250, 280)][(251, 201)][(252, 269)][(253, 224)][(254, 292)][(255, 216)][(256, 284)][(257, 264)][(258, 268)][(259, 220)][(260, 276)][(261, 210)][(262, 277)]
+UNISOC_ICON_MAPPING = [(227, 222), (228, 274), (229, 226), (230, 283), (231, 212), (232, 278), (233, 265), (234, 286), (235, 301), (236, 270), (237, 295), (238, 275), (239, 202), (240, 271), (241, 203), (242, 273), (243, 217), (244, 285), (245, 219), (246, 287), (247, 207), (248, 272), (249, 200), (250, 280), (251, 201), (252, 269), (253, 224), (254, 292), (255, 216), (256, 284), (257, 264), (258, 268), (259, 220), (260, 276), (261, 210), (262, 277)]
 
 def prepare_slots_pool(custom_wallpapers, orig_mmi, preferred_start_slot = 38):
     '''
@@ -111,18 +113,20 @@ with 100% crystal-clear clarity (blur = 0.0, ZERO blur).
         for s in range(start_slot, 71):
             idx = s - 2
             val = custom_wallpapers.get(s)
-            while val:
+            # NOTE(recovery): decompiler emitted `while val:` here; restored to `if/else`
+            # (the `while` form would loop forever). Verify against original source.
+            if val:
                 if isinstance(val, bytes):
                     packed[s] = val
                     continue
                 packed[s] = encode_sjpg(val, q_idx = 0, blur = 0)
+                continue
             rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + idx * 4)[0]
             sz = struct.unpack_from('<I', orig_mmi, INFO_OFF + idx * 12 + 8)[0]
             abs_p = P40 + rel
             stock_im = spd_sjpg.sjpg_to_image(orig_mmi[abs_p:abs_p + sz])
             packed[s] = encode_sjpg(stock_im, q_idx = 0, blur = 0)
-        tot = (lambda .0: for d in .0:
-len(d) + 3 & -4.0)(packed.values()())
+        tot = sum((len(d) + 3 & -4) for d in packed.values())
         if tot <= pool_capacity:
             return (start_slot, start_off, packed)
         start_slot -= 2
@@ -131,36 +135,41 @@ len(d) + 3 & -4.0)(packed.values()())
     start_rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + start_idx * 4)[0]
     start_off = P40 + start_rel
     pool_capacity = end_off - start_off
-    
-    try:
-        for s in range(start_slot, 71):
-            while not s in custom_wallpapers:
-                pass
-            if isinstance(custom_wallpapers[s], bytes):
+    # NOTE(recovery): the fallback packing block below was heavily corrupted by the
+    # decompiler (lost control flow: bare `try`, `while not ... : pass`, `s = sum`).
+    # Reconstructed from context/intent: re-pack the widest pool, then progressively
+    # add blur to the largest custom wallpaper until everything fits. VERIFY against
+    # the original source before treating this branch as authoritative.
+    packed = { }
+    blurs = { }
+    for s in range(start_slot, 71):
+        idx = s - 2
+        val = custom_wallpapers.get(s)
+        if val:
+            if isinstance(val, bytes):
+                packed[s] = val
                 continue
-    s = sum
-
-    blurs = s
-    s = sum
-    if (lambda .0: for d in .0:
-len(d) + 3 & -4.0)(packed.values()()) > pool_capacity and blurs:
+            blurs[s] = 0.0
+            packed[s] = encode_sjpg(val, q_idx = 0, blur = 0)
+            continue
+        rel = struct.unpack_from('<I', orig_mmi, OFFSETS_OFF + idx * 4)[0]
+        sz = struct.unpack_from('<I', orig_mmi, INFO_OFF + idx * 12 + 8)[0]
+        abs_p = P40 + rel
+        stock_im = spd_sjpg.sjpg_to_image(orig_mmi[abs_p:abs_p + sz])
+        packed[s] = encode_sjpg(stock_im, q_idx = 0, blur = 0)
+    while sum((len(d) + 3 & -4) for d in packed.values()) > pool_capacity and blurs:
         largest_s = max(blurs.keys(), key = (lambda s: len(packed[s])))
         blurs[largest_s] += 0.05
         packed[largest_s] = encode_sjpg(custom_wallpapers[largest_s], q_idx = 0, blur = blurs[largest_s])
-    tot = (lambda .0: for d in .0:
-len(d) + 3 & -4.0)(packed.values()())
+    tot = sum((len(d) + 3 & -4) for d in packed.values())
     if not tot <= pool_capacity:
-        raise f'''Wallpapers exceeded pool capacity: {tot} > {pool_capacity}'''()
+        raise Exception(f'''Wallpapers exceeded pool capacity: {tot} > {pool_capacity}''')
     return (start_slot, start_off, packed)
 
 
 def prepare_slots_61_70(slot_inputs, orig_mmi):
     '''Compatibility wrapper redirecting to prepare_slots_pool.'''
-    ()
-    _ = None
-    packed = prepare_slots_pool(slot_inputs, orig_mmi, preferred_start_slot = 38)
-    return None
-# WARNING: Decompyle incomplete
+    return prepare_slots_pool(slot_inputs, orig_mmi, preferred_start_slot = 38)
 
 
 def build_modified_mmi(custom_wallpapers, theme_hex = None, use_unisoc_icons = False):
@@ -192,23 +201,16 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
         else:
             sjpg1 = val1
         if not len(sjpg1) <= 2551:
-            raise f'''Slot 1 exceeds 2551 bytes: {len(sjpg1)}'''()
+            raise Exception(f'''Slot 1 exceeds 2551 bytes: {len(sjpg1)}''')
         modified[892172:892172 + len(sjpg1)] = sjpg1
         if len(sjpg1) < 2551:
             modified[892172 + len(sjpg1):894723] = b'\x00' * (2551 - len(sjpg1))
     else:
         modified[892172:894723] = orig[892172:894723]
     
-    try:
-        for s in custom_wallpapers.keys():
-            while not s >= 2:
-                pass
-            while custom_wallpapers[s]:
-                pass
-    s = None
-
-    custom_slots = []
-    s = s
+    # NOTE(recovery): decompiler corrupted this into bare `try`/`while ...: pass`.
+    # Reconstructed as the list of slots (>= 2) that carry a real custom wallpaper.
+    custom_slots = [s for s in custom_wallpapers.keys() if s >= 2 and custom_wallpapers[s]]
     min_custom_slot = min(custom_slots) if custom_slots else 70
     preferred_start = 38
     if min_custom_slot < 38:
@@ -231,7 +233,7 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
             else:
                 sjpg = val
             if not len(sjpg) <= cap:
-                raise f'''Slot {s} exceeds capacity {cap}: {len(sjpg)}'''()
+                raise Exception(f'''Slot {s} exceeds capacity {cap}: {len(sjpg)}''')
             modified[abs_off:abs_off + len(sjpg)] = sjpg
             struct.pack_into('<HHII', modified, INFO_OFF + idx * 12, 240, 320, 522, len(sjpg))
             struct.pack_into('<I', modified, OFFSETS_OFF + idx * 4, abs_off - P40)
@@ -248,7 +250,7 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
         struct.pack_into('<I', modified, OFFSETS_OFF + idx * 4, curr_off - P40)
         curr_off = curr_off + len(data) + 3 & -4
     if not curr_off <= 40042980:
-        raise f'''CRITICAL: Slots overflowed pool: 0x{curr_off:X} > 0x26301E4'''()
+        raise Exception(f'''CRITICAL: Slots overflowed pool: 0x{curr_off:X} > 0x26301E4''')
     if curr_off < 40042980:
         modified[curr_off:40042980] = b'\x00' * (40042980 - curr_off)
     if use_unisoc_icons:
@@ -263,46 +265,36 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
         print(f'''Warning: could not apply text patches: {e}''')
 
     return (bytes(orig), bytes(modified))
-# WARNING: Decompyle incomplete
 
 
 def generate_diff_table(orig, modified, max_gap = 64):
     '''Generates contiguous diff chunks between original and modified binaries.'''
-    
-    try:
-        for i in range(len(orig)):
-            while not orig[i] != modified[i]:
-                pass
-    i = None
-
-    diff_indices = []
-    i = i
+    # NOTE(recovery): decompiler corrupted the diff scan and grouping into bare
+    # `try`/`while ...: pass`. Reconstructed from intent; verify against original.
+    diff_indices = [i for i in range(len(orig)) if orig[i] != modified[i]]
     if not diff_indices:
         return bytearray(struct.pack('<I', 0))
     chunks = []
     start = diff_indices[0]
     prev = diff_indices[0]
     for d in diff_indices[slice(1, None, None)]:
-        while d - prev <= max_gap:
+        if d - prev <= max_gap:
             prev = d
-        chunks.append((start, (prev - start) + 1))
-        start = d
-        prev = d
+        else:
+            chunks.append((start, (prev - start) + 1))
+            start = d
+            prev = d
     chunks.append((start, (prev - start) + 1))
     for start, length in chunks:
-        while 39317504 <= start:
-            if not start <= 40043776:
+        if 39317504 <= start <= 40043776:
+            if start + length <= 40042980:
                 continue
-        chunks
-        if start + length <= 40042980:
-            continue
-        raise f'''CRITICAL: Wallpaper chunk at 0x{start:X} exceeded pool (0x{start + length:X} > 0x26301E4)'''()
+            raise Exception(f'''CRITICAL: Wallpaper chunk at 0x{start:X} exceeded pool (0x{start + length:X} > 0x26301E4)''')
     diff_table = bytearray(struct.pack('<I', len(chunks)))
     for start, length in chunks:
         diff_table.extend(struct.pack('<II', start, length))
         diff_table.extend(modified[start:start + length])
     return diff_table
-# WARNING: Decompyle incomplete
 
 
 def load_live_wot_state():

@@ -34,8 +34,10 @@ if getattr(sys, 'frozen', False):
             BASE_DIR = _internal
         else:
             BASE_DIR = os.path.dirname(sys.executable)
-    else:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    # NOTE(recovery): this else belongs to `if frozen` (decompiler mis-nested it);
+    # without it BASE_DIR was undefined when run as a plain .py.
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 import spd_sjpg
@@ -71,8 +73,7 @@ Full 2x HD Zoom preview modal (480x640) for inspecting fine wallpaper details.
     
     def __init__(self, parent, image, slot_num):
         '''תצוגת HD מוגדלת פי 2 (480x640) - טפט #'''
-        # unsupported opcode LOAD_SUPER_ATTR
-        self(parent)
+        super().__init__(parent)
         self.title(f'''תצוגת HD מוגדלת פי 2 (480x640) - טפט #{slot_num}''')
         self.geometry('520x750')
         self.resizable(False, False)
@@ -89,7 +90,6 @@ Full 2x HD Zoom preview modal (480x640) for inspecting fine wallpaper details.
         btn_close = tk.Button(self, text = 'סגור חלון', font = ('Segoe UI', 10, 'bold'), bg = '#3d405b', fg = '#ffffff', activebackground = '#2b2d42', activeforeground = '#ffffff', relief = 'flat', padx = 20, pady = 6, cursor = 'hand2', command = self.destroy)
         btn_close.pack(pady = (8, 12))
         return None
-    # WARNING: Decompyle incomplete
 
 
 
@@ -101,8 +101,7 @@ Displays 1:1 native 240x320 preview for maximum clarity.
     
     def __init__(self, parent, image_path, slot_num):
         '''התאמת תמונה - טפט #'''
-        # unsupported opcode LOAD_SUPER_ATTR
-        self(parent)
+        super().__init__(parent)
         self.title(f'''התאמת תמונה - טפט #{slot_num}''')
         self.geometry('460x650')
         self.resizable(False, False)
@@ -116,7 +115,6 @@ Displays 1:1 native 240x320 preview for maximum clarity.
         self._build_ui()
         self._update_preview()
         return None
-    # WARNING: Decompyle incomplete
 
     
     def _build_ui(self):
@@ -172,8 +170,7 @@ Shows side-by-side previews of Slot A and Slot B with real-time live updates.
     
     def __init__(self, parent, initial_slot_a = 1, initial_slot_b = None):
         '''⇄ החלפת מיקומים בין טפטים'''
-        # unsupported opcode LOAD_SUPER_ATTR
-        self(parent)
+        super().__init__(parent)
         self.parent = parent
         self.title('⇄ החלפת מיקומים בין טפטים')
         self.geometry('540x510')
@@ -193,7 +190,6 @@ Shows side-by-side previews of Slot A and Slot B with real-time live updates.
         self._build_ui()
         self._update_views()
         return None
-    # WARNING: Decompyle incomplete
 
     
     def _build_ui(self):
@@ -307,8 +303,7 @@ and copyright credit to @מה-זה-משנה-אה.
 '''
     
     def __init__(self, parent, duration_ms = 2800):
-        # unsupported opcode LOAD_SUPER_ATTR
-        self(parent)
+        super().__init__(parent)
         self.overrideredirect(True)
         self.configure(bg = '#06d6a0')
         splash_w = 600
@@ -348,7 +343,6 @@ and copyright credit to @מה-זה-משנה-אה.
         self.bind('<Key>', (lambda e: self._dismiss()))
         self.after(duration_ms, self._dismiss)
         return None
-    # WARNING: Decompyle incomplete
 
     
     def _dismiss(self):
@@ -365,8 +359,7 @@ class Q8WallpaperStudio(tk.Tk):
     
     def __init__(self):
         '''סטודיו לQ8'''
-        # unsupported opcode LOAD_SUPER_ATTR
-        self()
+        super().__init__()
         self.title('סטודיו לQ8')
         self.geometry('1280x860')
         self.minsize(980, 680)
@@ -444,7 +437,6 @@ class Q8WallpaperStudio(tk.Tk):
             return None
 
         return None
-    # WARNING: Decompyle incomplete
 
     
     def post_ui(self, func):
@@ -520,8 +512,8 @@ class Q8WallpaperStudio(tk.Tk):
         if hasattr(self, 'text_frame'):
             self.text_frame.pack_forget()
         for btn in (getattr(self, 'btn_tab_wp', None), getattr(self, 'btn_tab_theme', None), getattr(self, 'btn_tab_text', None)):
-            while not btn:
-                pass
+            if not btn:
+                continue
             btn.config(bg = '#252830', fg = '#adb5bd', font = ('Segoe UI', 11))
         if tab_name == 'wallpapers':
             self.wallpaper_frame.pack(fill = 'both', expand = True, padx = 12, pady = 8)
@@ -685,23 +677,25 @@ class Q8WallpaperStudio(tk.Tk):
         slider_frame.pack(side = 'right', padx = (0, 14))
         lbl_slider_title = tk.Label(slider_frame, text = 'בהירות', font = ('Segoe UI', 8, 'bold'), fg = '#adb5bd', bg = '#21242b')
         lbl_slider_title.pack(anchor = 'center')
-        self.slider_brightness = (slider_frame,)(*{
-            'from_': 100,
-            'to': 25,
-            'orient': 'vertical',
-            'resolution': 1,
-            'showvalue': 0,
-            'length': 100,
-            'width': 14,
-            'sliderlength': 18,
-            'bg': '#21242b',
-            'fg': '#ffffff',
-            'troughcolor': '#181a1f',
-            'activebackground': '#06d6a0',
-            'highlightthickness': 0,
-            'bd': 0,
-            'cursor': 'hand2',
-            'command': self._on_slider_change })
+        # NOTE(recovery): decompiler mangled this widget construction into
+        # `(slider_frame,)(*{...})`; reconstructed as a tk.Scale call.
+        self.slider_brightness = tk.Scale(slider_frame,
+            from_ = 100,
+            to = 25,
+            orient = 'vertical',
+            resolution = 1,
+            showvalue = 0,
+            length = 100,
+            width = 14,
+            sliderlength = 18,
+            bg = '#21242b',
+            fg = '#ffffff',
+            troughcolor = '#181a1f',
+            activebackground = '#06d6a0',
+            highlightthickness = 0,
+            bd = 0,
+            cursor = 'hand2',
+            command = self._on_slider_change)
         self.slider_brightness.set(int(round(self.current_v * 100)))
         self.slider_brightness.pack(pady = 4)
         self.slider_brightness.bind('<ButtonRelease-1>', (lambda e: self.preview_theme(self._pending_theme_hex or self.current_theme_hex, 'מותאם אישית')))
@@ -1291,21 +1285,24 @@ class Q8WallpaperStudio(tk.Tk):
         lines = []
         for paragraph in body.split('\n'):
             p = paragraph.strip()
-            while not p:
-                pass
+            if not p:
+                continue
             p_norm = p.replace('לשכפל ו/או', 'לשכפל ו /או')
             words = p_norm.split(' ')
             cur = ''
             for w in words:
-                while not w:
-                    pass
-                while '@' in w and '-' in w and len(w) > 14:
+                if not w:
+                    continue
+                # NOTE(recovery): decompiler rendered the next branch as `while`;
+                # restored to `if` (long hyphenated email word split across lines).
+                if '@' in w and '-' in w and len(w) > 14:
                     if cur:
                         lines.append(cur)
                         cur = ''
                     parts = w.split('-')
                     lines.append(parts[0] + '-')
                     lines.append('-'.join(parts[slice(1, None, None)]))
+                    continue
                 test = (cur + ' ' + w).strip() if cur else w
                 if len(test) <= 23:
                     cur = test
@@ -1319,8 +1316,8 @@ class Q8WallpaperStudio(tk.Tk):
         y = 98
         for line in lines:
             line_clean = line.strip()
-            while not line_clean:
-                pass
+            if not line_clean:
+                continue
             is_email = '@' in line_clean or 'tech.com' in line_clean
             if is_email:
                 color = '#2D5FB2'
@@ -1385,7 +1382,8 @@ class Q8WallpaperStudio(tk.Tk):
         if not query:
             return None
         self.lbl_status.config(text = f'''מחפש \'{query}\' במכשיר...''')
-        self.tree_strings.get_children()()
+        # NOTE(recovery): decompiler left `get_children()()`; restored to clearing the tree.
+        self.tree_strings.delete(*self.tree_strings.get_children())
         results = text_engine.search_hebrew_strings(query)
         if not results:
             self.lbl_status.config(text = f'''לא נמצאו מילים תואמות ל-\'{query}\'.''')
@@ -1782,12 +1780,12 @@ class Q8WallpaperStudio(tk.Tk):
         elif is_custom:
             pass
         
-        '#06d6a0'('#343a40', fill = 3, outline = 2, width = 1)
+        # NOTE(recovery): decompiler lost this canvas call (target + args corrupted);
+        # verify against original source. Neutralized so it is a no-op instead of a crash.
+        # '#06d6a0'('#343a40', fill = 3, outline = 2, width = 1)
         self.canvas.itemconfig(f'''btn_rst_bg_{slot}''', fill = '#5c2429' if is_custom else '#252830')
         self.canvas.itemconfig(f'''btn_rst_txt_{slot}''', fill = '#ff6b6b' if is_custom else '#495057')
-        custom_count = (lambda .0: for s in .0:
-if not self.slot_state.get(s, { }).get('is_custom'):
-continue1.0)(range(1, TOTAL_WALLPAPERS + 1)())
+        custom_count = sum(1 for s in range(1, TOTAL_WALLPAPERS + 1) if self.slot_state.get(s, { }).get('is_custom'))
         self.lbl_count.configure(text = f'''מותאמים אישית: {custom_count} / {TOTAL_WALLPAPERS}''')
         if slot == self.selected_slot:
             self._update_hd_preview()
