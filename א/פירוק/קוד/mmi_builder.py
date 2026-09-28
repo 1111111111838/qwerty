@@ -201,53 +201,191 @@ def prepare_slots_61_70(slot_inputs, orig_mmi):
 # other LIST0 indices; v1 replaces the normal icons.
 MENU_ICON_INDICES = [227, 229, 231, 233, 235, 237, 241, 243, 251]
 
+# Maps a normal menu-icon index -> its "selected/highlighted" LIST0 index (the
+# variant shown with the shadow + check badge when the item is focused). These
+# are not at a fixed offset and the icons are too stylistically similar to detect
+# reliably by shape, so they are mapped from the exported icon atlas. Empty until
+# the atlas is inspected; when empty, selected variants are left unchanged.
+SELECTED_ICON_INDICES = {}
 
-def apply_custom_icons(modified, orig, icon_images):
-    '''
-Writes custom icons into their LIST0 slots. icon_images maps a menu position
-(0..8) to a PIL image. Each icon is ABM-encoded to match the original slot's
-geometry and shrunk (fewer colors) if needed to fit the slot's capacity. Slots
-that do not fit even at minimum quality are left unchanged.
-'''
-    import spd_sjpg
-    report = []
-    for pos, img in icon_images.items():
-        if img is None or pos < 0 or pos >= len(MENU_ICON_INDICES):
-            continue
-        idx = MENU_ICON_INDICES[pos]
+
+def _list0_slot(orig, idx):
+    '''Return (abs_off, sz, cap, geometry) for a LIST0 icon index, or None.'''
+    try:
         rel = struct.unpack_from('<I', orig, LIST0_OFFSETS_OFF + idx * 4)[0]
         sz = struct.unpack_from('<I', orig, LIST0_INFO_OFF + idx * 12 + 8)[0]
         abs_off = LIST0_P0 + rel
-        # capacity = space up to the next icon in the file (keeps layout intact)
         next_rel = struct.unpack_from('<I', orig, LIST0_OFFSETS_OFF + (idx + 1) * 4)[0]
         cap = (LIST0_P0 + next_rel) - abs_off
         if cap <= 0:
             cap = sz
-        # match the original icon geometry so the device places it correctly
-        oh = orig[abs_off:abs_off + 16]
+        if sz < 16 or abs_off < 0 or abs_off + sz > len(orig):
+            return None
         try:
-            W, H, _, _, topY, topX, bottomY, bottomX = struct.unpack('>HHHHBBBB', oh[4:16])
+            W, H, _, _, topY, topX, bottomY, bottomX = struct.unpack('>HHHHBBBB', orig[abs_off + 4:abs_off + 16])
         except Exception:
             W, H, topY, topX, bottomY, bottomX = 68, 66, 9, 5, 5, 11
-        enc = None
-        # Try richest palette first, then shrink colors until it fits the slot.
-        # Never above 256 (encoder enforces this too) so the device stays on its
-        # palette decode path; large/detailed icons keep dropping colors to fit.
-        for maxcol in (256, 200, 128, 96, 64, 48, 32, 24, 16, 12, 8, 6, 4):
-            cand = spd_sjpg.encode_abm_icon(img, W=W, H=H, topY=topY, topX=topX, bottomY=bottomY, bottomX=bottomX, max_colors=maxcol)
-            if len(cand) <= cap:
-                enc = cand
-                break
-            enc = cand
-        if enc is None or len(enc) > cap:
-            report.append((idx, 'too big', len(enc) if enc else 0, cap))
+        return (abs_off, sz, cap, (W, H, topY, topX, bottomY, bottomX))
+    except Exception:
+        return None
+
+
+def _decode_list0(orig, idx):
+    '''Decode a LIST0 icon to an RGBA image, or None if it is not an ABM icon.'''
+    slot = _list0_slot(orig, idx)
+    if slot is None:
+        return None
+    abs_off, sz, cap, geom = slot
+    data = orig[abs_off:abs_off + sz]
+    if data[:3] != b'ABM':
+        return None
+    try:
+        import spd_sjpg
+        return spd_sjpg.decode_abm(data)
+    except Exception:
+        return None
+
+
+def _icon_signature(im):
+    '''A small normalized grayscale vector for correlating two icons by shape.'''
+    g = im.convert('RGBA').resize((32, 32), Image.LANCZOS)
+    r, gr, b, a = g.split()
+    lum = Image.merge('RGB', (r, gr, b)).convert('L')
+    # weight luminance by alpha so the transparent border does not dominate
+    px = list(lum.getdata())
+    ap = list(a.getdata())
+    vec = [px[i] * (ap[i] / 255.0) for i in range(len(px))]
+    m = sum(vec) / len(vec)
+    vec = [v - m for v in vec]
+    norm = sum(v * v for v in vec) ** 0.5
+    if norm < 1e-6:
+        return None
+    return [v / norm for v in vec]
+
+
+def _correlate(s1, s2):
+    if not s1 or not s2:
+        return -1.0
+    return sum(a * b for a, b in zip(s1, s2))
+
+
+def _find_selected_variant(orig, normal_idx, exclude):
+    '''
+Locate the "selected/highlighted" LIST0 icon that pairs with a normal menu icon.
+Selected variants (with the shadow + check badge) live at other indices that are
+not fixed, so we find them by shape: decode nearby icons and pick the one whose
+glyph correlates most strongly with the normal icon. Returns an index or None.
+'''
+    base = _decode_list0(orig, normal_idx)
+    if base is None:
+        return None
+    base_sig = _icon_signature(base)
+    if base_sig is None:
+        return None
+    best_idx = None
+    best = 0.0
+    second = 0.0
+    for cand in range(normal_idx - 2, normal_idx + 16):
+        if cand == normal_idx or cand in exclude:
             continue
-        modified[abs_off:abs_off + len(enc)] = enc
-        if len(enc) < sz:
-            modified[abs_off + len(enc):abs_off + sz] = b'\x00' * (sz - len(enc))
-        struct.pack_into('<I', modified, LIST0_INFO_OFF + idx * 12 + 8, len(enc))
-        report.append((idx, 'ok', len(enc), cap))
+        im = _decode_list0(orig, cand)
+        if im is None:
+            continue
+        score = _correlate(base_sig, _icon_signature(im))
+        if score > best:
+            second = best
+            best = score
+            best_idx = cand
+        elif score > second:
+            second = score
+    # require a strong, clearly-best match so we never overwrite an unrelated icon
+    if best_idx is not None and best >= 0.80 and (best - second) >= 0.04:
+        return best_idx
+    return None
+
+
+def _write_icon_slot(modified, orig, idx, img):
+    '''
+Encode img into LIST0 icon `idx`, matching its geometry and fitting its slot
+capacity by dropping colors as needed. Returns (status, size, cap).
+'''
+    import spd_sjpg
+    slot = _list0_slot(orig, idx)
+    if slot is None:
+        return ('no slot', 0, 0)
+    abs_off, sz, cap, (W, H, topY, topX, bottomY, bottomX) = slot
+    enc = None
+    for maxcol in (256, 200, 128, 96, 64, 48, 32, 24, 16, 12, 8, 6, 4):
+        cand = spd_sjpg.encode_abm_icon(img, W=W, H=H, topY=topY, topX=topX, bottomY=bottomY, bottomX=bottomX, max_colors=maxcol)
+        if len(cand) <= cap:
+            enc = cand
+            break
+        enc = cand
+    if enc is None or len(enc) > cap:
+        return ('too big', len(enc) if enc else 0, cap)
+    modified[abs_off:abs_off + len(enc)] = enc
+    if len(enc) < sz:
+        modified[abs_off + len(enc):abs_off + sz] = b'\x00' * (sz - len(enc))
+    struct.pack_into('<I', modified, LIST0_INFO_OFF + idx * 12 + 8, len(enc))
+    return ('ok', len(enc), cap)
+
+
+def apply_custom_icons(modified, orig, icon_images):
+    '''
+Writes custom icons into their LIST0 slots. icon_images maps a menu position
+(0..8) to a PIL image. Each normal icon is ABM-encoded to match its slot
+geometry and shrunk (fewer colors) if needed to fit the slot's capacity. The
+matching "selected/highlighted" variant (shown when the item is focused) is
+located by shape and replaced with the same image, so a replaced icon stays
+custom in both states. Slots that do not fit are left unchanged.
+'''
+    report = []
+    # every menu index (normal + any detected selected) is off-limits as a match
+    exclude = set(MENU_ICON_INDICES)
+    for pos, img in icon_images.items():
+        if img is None or pos < 0 or pos >= len(MENU_ICON_INDICES):
+            continue
+        idx = MENU_ICON_INDICES[pos]
+        status, size, cap = _write_icon_slot(modified, orig, idx, img)
+        report.append((idx, status, size, cap))
+        if status != 'ok':
+            continue
+        sel = SELECTED_ICON_INDICES.get(idx)
+        if sel is not None and sel not in exclude:
+            exclude.add(sel)
+            s2, sz2, cap2 = _write_icon_slot(modified, orig, sel, img)
+            report.append((sel, 'sel:' + s2, sz2, cap2))
+        else:
+            report.append((idx, 'sel:pending', 0, 0))
     return report
+
+
+def export_icon_atlas(out_path, lo=210, hi=262, cols=8, cell=64):
+    '''
+Decode every LIST0 icon in [lo, hi] and save a single labelled montage PNG. Used
+to visually identify the selected/highlighted variant index that pairs with each
+normal menu icon (they are not at a fixed offset). Returns (out_path, count).
+'''
+    from PIL import ImageDraw
+    with open(MMI_DUMP_PATH, 'rb') as f:
+        orig = f.read()
+    items = [(idx, _decode_list0(orig, idx)) for idx in range(lo, hi + 1)]
+    rows = (len(items) + cols - 1) // cols
+    label_h = 14
+    atlas = Image.new('RGB', (cols * cell, rows * (cell + label_h)), (34, 37, 42))
+    d = ImageDraw.Draw(atlas)
+    for i, (idx, im) in enumerate(items):
+        r, c = divmod(i, cols)
+        x = c * cell
+        y = r * (cell + label_h)
+        chip = Image.new('RGBA', (cell, cell), (255, 255, 255, 255))
+        if im is not None:
+            chip.alpha_composite(im.convert('RGBA').resize((cell - 8, cell - 8), Image.LANCZOS), (4, 4))
+        atlas.paste(chip.convert('RGB'), (x, y + label_h))
+        mark = str(idx) + ('*' if idx in MENU_ICON_INDICES else '')
+        d.text((x + 2, y + 1), mark, fill=(255, 214, 102))
+    atlas.save(out_path)
+    return (out_path, len(items))
 
 
 def build_modified_mmi(custom_wallpapers, theme_hex = None, use_unisoc_icons = False, custom_icons = None):

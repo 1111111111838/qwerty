@@ -395,7 +395,19 @@ to the device ABM format at deploy time.
         btns = tk.Frame(self, bg = '#22252a')
         btns.pack(fill = 'x', padx = 16, pady = 12)
         tk.Button(btns, text = '✔ סגור', font = ('Segoe UI', 11, 'bold'), bg = '#06d6a0', fg = '#111215', relief = 'flat', padx = 16, pady = 6, cursor = 'hand2', command = self.destroy).pack(side = 'right', padx = 6)
+        tk.Button(btns, text = '🔎 ייצא מפת אייקונים', font = ('Segoe UI', 10), bg = '#e07b39', fg = '#fff', relief = 'flat', padx = 12, pady = 6, cursor = 'hand2', command = self._export_atlas).pack(side = 'left', padx = 6)
         tk.Label(self, text = 'לאחר בחירה, לחץ "החל והכן לצריבה" במסך הראשי.', font = ('Segoe UI', 9), fg = '#ffd166', bg = '#22252a').pack(pady = (0, 6))
+
+    def _export_atlas(self):
+        import os
+        try:
+            downloads = os.path.join(os.path.expanduser('~'), 'Downloads')
+            base = downloads if os.path.isdir(downloads) else os.path.expanduser('~')
+            out = os.path.join(base, 'q8_icon_atlas.png')
+            path, n = mmi_builder.export_icon_atlas(out)
+            messagebox.showinfo('מפת אייקונים', f'‏נשמרה מפה של {n} אייקונים:\n{path}\n\nשלח/י את הקובץ הזה כדי שנזהה את אייקוני הבחירה (הווריאנט עם הצל וה-✓).')
+        except Exception as e:
+            messagebox.showerror('שגיאה', f'‏ייצוא נכשל:\n{e}')
 
     def _render_thumb(self, canvas, pos):
         img = self.parent.custom_icons.get(pos) or self._orig_imgs.get(pos)

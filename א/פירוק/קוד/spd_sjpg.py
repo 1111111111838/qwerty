@@ -76,7 +76,7 @@ def decode_abm(data):
     return out
 
 
-def encode_abm_icon(img, W=68, H=66, topY=9, topX=5, bottomY=5, bottomX=11, bg=None, max_colors=256, alpha_thr=12):
+def encode_abm_icon(img, W=68, H=66, topY=9, topX=5, bottomY=5, bottomX=11, bg=None, max_colors=256, alpha_thr=12, sharpen=True):
     """
 Encode a PIL image to a device-format ABM icon, matching the exact structure of
 the phone's own menu icons (verified by decoding all five stock icons and
@@ -104,6 +104,13 @@ keeping transparency.
         base = Image.new('RGBA', (aw, ah), tuple(bg) + (255,))
         base.alpha_composite(im)
         im = base
+    if sharpen:
+        # Sharpen RGB only (leave alpha untouched) to counter the softness of
+        # downscaling a photo/logo into the tiny 52x52 icon area.
+        r_, g_, b_, a_ = im.split()
+        rgb_s = Image.merge('RGB', (r_, g_, b_)).filter(ImageFilter.UnsharpMask(radius=1.2, percent=90, threshold=1))
+        rs_, gs_, bs_ = rgb_s.split()
+        im = Image.merge('RGBA', (rs_, gs_, bs_, a_))
     rgb = im.convert('RGB')
     aband = list(im.split()[3].getdata())
 
