@@ -95,43 +95,72 @@ def decode_abm(data):
     return out
 
 
-def encode_abm_icon(img, W=68, H=66, topY=9, topX=5, bottomY=5, bottomX=11, bg=(255, 255, 255), max_colors=256):
-    '''
-Encode a PIL image to a device-format ABM icon (opaque, composited over bg so
-the menu background shows through cleanly). Matches the stock icon geometry.
+def encode_abm_icon(img, W=68, H=66, topY=9, topX=5, bottomY=5, bottomX=11, bg=None, max_colors=256, alpha_thr=12):
+    """
+Encode a PIL image to a device-format ABM icon, matching the exact structure of
+the phone's own menu icons (verified by decoding all five stock icons and
+re-encoding them to a pixel-faithful result).
 
-CRITICAL: the palette must never exceed 256 colors. The device decoder has two
-paths -- a palette path for noColors <= 256 and an RGB-direct path for > 256.
-The firmware's menu-icon renderer only handles the palette path; feeding it a
->256-color icon overflows its buffer and reboots the phone on menu entry. We
-therefore always quantize down to at most 256 (and `max_colors` lets the caller
-shrink further so a detailed icon fits its slot capacity).
-'''
+Crucially the icon MUST carry an alpha channel: every stock icon has noAlpha in
+the 150-186 range, and the firmware's decoder builds a per-colour alpha array
+indexed by pixel. An icon with noAlpha == 0 leaves that array unallocated, so the
+menu renderer reads out of bounds and the phone reboots on menu entry. We
+therefore always emit a valid alpha region (noAlpha >= 3, padded with unused
+entries for a fully opaque image) and preserve real transparency when present.
+
+Palette layout (as the device parses it): noColor opaque RGB565 colours, then
+noAlpha semi/transparent RGB565 colours, then an alpha region of
+((noAlpha-1)//2)*2 bytes (one alpha value per transparent colour). noColors =
+noColor + noAlpha is kept <= 500 so bpp stays <= 9 like the stock icons.
+`max_colors` shrinks the RGB palette so a detailed icon fits its slot capacity;
+`bg`, when given, composites the image over that colour (opaque) instead of
+keeping transparency.
+"""
     aw = W - bottomX - topX
     ah = H - bottomY - topY
     im = img.convert('RGBA').resize((aw, ah), Image.LANCZOS)
-    base = Image.new('RGBA', (aw, ah), tuple(bg) + (255,))
-    base.alpha_composite(im)
-    rgb = base.convert('RGB')
-    cap_colors = max(2, min(int(max_colors), 256))
-    pix = list(rgb.getdata())
-    c565 = [_rgb_to_565(r, g, b) for (r, g, b) in pix]
-    uniq = sorted(set(c565))
-    if len(uniq) > cap_colors:
-        q = rgb.quantize(colors=cap_colors, method=Image.MEDIANCUT)
+    if bg is not None:
+        base = Image.new('RGBA', (aw, ah), tuple(bg) + (255,))
+        base.alpha_composite(im)
+        im = base
+    rgb = im.convert('RGB')
+    aband = list(im.split()[3].getdata())
+
+    def _qa(a):
+        if a <= alpha_thr:
+            return 0
+        if a >= 255 - alpha_thr:
+            return 255
+        return a
+
+    apx = [_qa(a) for a in aband]
+    c565pix = [_rgb_to_565(r, g, b) for (r, g, b) in rgb.getdata()]
+    # Reduce the RGB palette until the whole thing (colours + alpha colours + a
+    # little padding) fits in <= 500 entries, so bpp never exceeds 9.
+    cap = max(2, min(int(max_colors), 320))
+    while True:
+        ent = [(0, 0) if apx[i] == 0 else (c565pix[i], apx[i]) for i in range(len(apx))]
+        opaque = sorted({c for (c, a) in ent if a == 255})
+        alpha_e = sorted({(c, a) for (c, a) in ent if a != 255})
+        noColor = len(opaque)
+        g = len(alpha_e)
+        noAlpha = (g + 2) if g > 0 else 3
+        noColors = noColor + noAlpha
+        if noColors <= 500 or cap <= 4:
+            break
+        cap = max(4, cap * 3 // 4)
+        q = rgb.quantize(colors=cap, method=Image.MEDIANCUT)
         qp = q.getpalette() or []
-        ncol = len(qp) // 3
         qi = list(q.getdata())
-        qcol = [_rgb_to_565(qp[i * 3], qp[i * 3 + 1], qp[i * 3 + 2]) for i in range(ncol)]
-        uniq = sorted(set(qcol))
-        idxmap = {c: i for i, c in enumerate(uniq)}
-        indices = [idxmap[qcol[qi[k]]] for k in range(len(qi))]
-    else:
-        idxmap = {c: i for i, c in enumerate(uniq)}
-        indices = [idxmap[c] for c in c565]
-    noColor = len(uniq)
-    noAlpha = 0
-    noColors = noColor
+        qc = [_rgb_to_565(qp[k * 3], qp[k * 3 + 1], qp[k * 3 + 2]) for k in range(len(qp) // 3)]
+        c565pix = [qc[qi[i]] for i in range(len(qi))]
+    ab_len = ((noAlpha - 1) // 2) * 2 if noAlpha > 0 else 0
+    opq_idx = {c: i for i, c in enumerate(opaque)}
+    alp_idx = {ca: noColor + i for i, ca in enumerate(alpha_e)}
+    indices = []
+    for i in range(len(ent)):
+        c, a = ent[i]
+        indices.append(opq_idx[c] if a == 255 else alp_idx[(c, a)])
     nc = noColors - 1
     bpp = 0
     while nc:
@@ -142,9 +171,17 @@ shrink further so a detailed icon fits its slot capacity).
     out = bytearray(b'ABM')
     out.append(0x52)
     out += struct.pack('>HHHHBBBB', W, H, noColor, noAlpha, topY, topX, bottomY, bottomX)
-    for c in uniq:
+    for c in opaque:
         out += struct.pack('>H', c)
-    # Build run-length segments (value, length).
+    for (c, a) in alpha_e:
+        out += struct.pack('>H', c)
+    for _ in range(noAlpha - len(alpha_e)):
+        out += struct.pack('>H', 0)   # unused padding palette entries
+    ar = bytearray(a for (c, a) in alpha_e)
+    while len(ar) < ab_len:
+        ar.append(255)
+    out += bytes(ar[:ab_len])
+    # Run-length segments (value, length).
     segs = []
     i = 0
     n = len(indices)
@@ -154,12 +191,8 @@ shrink further so a detailed icon fits its slot capacity).
             j += 1
         segs.append((indices[i], j - i))
         i = j
-    # Emit control pairs (pixels, count). A pair reads `pixels` individual
-    # palette indices, then (if count > 0) one more index repeated `count`
-    # times. Runs of length 1 are batched as literals so the 2-byte control
-    # overhead is amortized across up to 255 pixels instead of paid per pixel
-    # (the old scheme cost 2 ctrl bytes for every single pixel in noisy areas,
-    # which blew detailed icons past their slot capacity).
+    # Control pairs (pixels, count): batch single pixels as literals so the
+    # 2-byte overhead is amortized instead of paid per pixel.
     ctrl = bytearray()
     bits = []
     lit = []
