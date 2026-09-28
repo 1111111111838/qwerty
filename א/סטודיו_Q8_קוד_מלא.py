@@ -2,11 +2,11 @@
 # Studio Q8 - Wallpaper Studio  (single-file build, application code only)
 # Recovered from the packaged executable and repaired to run as ONE module.
 # Intra-app imports removed and aliased below; importlib.reload() removed.
-# Recovery fixes: infinite-while artifacts restored; SJPG quant tables scaled x8
-# to the true device magnitude; re-encode uses q_idx=2 (device stock format);
-# packing caches stock decode and bounds blur loops; low fixed-capacity slots and
-# slot 1 blur to fit or keep the original instead of aborting the build.
-# Errors -> q8_build_error.log; DLL write under Program Files needs Administrator.
+# Recovery fixes: infinite-while artifacts restored; SJPG quant tables scaled x8;
+# re-encode uses q_idx=2 (device stock format); packing caches stock decode and
+# bounds blur loops; low/slot-1 blur-to-fit or keep original.
+# Feature: "Text to Wallpaper" (render long Hebrew text like Birkat Hamazon into
+# multiple wallpapers). Errors -> q8_build_error.log; DLL write needs Administrator.
 # Marks: "NOTE(recovery)".
 # ============================================================
 
@@ -1256,6 +1256,93 @@ Downsamples image with high-quality Lanczos and subtle sharpening for crystal-cl
     return thumb.filter(ImageFilter.UnsharpMask(radius = 0.6, percent = 100, threshold = 2))
 
 
+def find_hebrew_font(size):
+    '''Returns a Hebrew-capable PIL font, trying common Windows fonts.'''
+    from PIL import ImageFont
+    candidates = [
+        'C:\\Windows\\Fonts\\david.ttf', 'C:\\Windows\\Fonts\\DAVIDBD.TTF',
+        'C:\\Windows\\Fonts\\narkisim.ttf', 'C:\\Windows\\Fonts\\FrankRuehl.ttf',
+        'C:\\Windows\\Fonts\\gisha.ttf', 'C:\\Windows\\Fonts\\tahoma.ttf',
+        'C:\\Windows\\Fonts\\arial.ttf', 'C:\\Windows\\Fonts\\segoeui.ttf',
+        'C:\\Windows\\Fonts\\times.ttf', 'arial.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf']
+    for p in candidates:
+        try:
+            return ImageFont.truetype(p, size)
+        except Exception:
+            continue
+    from PIL import ImageFont as _IF
+    return _IF.load_default()
+
+
+def render_text_to_wallpapers(text, font_size = 20, fg = (25, 25, 25), bg = (247, 242, 227), margin = 12, line_gap = 5, title = None, title_size = None):
+    '''
+Renders a long (Hebrew) text into a list of 240x320 wallpaper images.
+Right-to-left, right-aligned, word-wrapped, paginated across as many images
+as needed. Returns a list of PIL RGB images.
+'''
+    from PIL import ImageDraw
+    W = THUMB_W if False else 240
+    H = 320
+    font = find_hebrew_font(font_size)
+    tfont = find_hebrew_font(title_size or font_size + 4)
+    tmp = Image.new('RGB', (W, H))
+    d = ImageDraw.Draw(tmp)
+    max_w = W - 2 * margin
+
+    def wrap(s, fnt):
+        out = []
+        for para in s.replace('\r', '').split('\n'):
+            para = para.strip()
+            if not para:
+                out.append('')
+                continue
+            words = para.split(' ')
+            cur = ''
+            for w in words:
+                test = (cur + ' ' + w).strip()
+                if d.textlength(test, font = fnt) <= max_w:
+                    cur = test
+                else:
+                    if cur:
+                        out.append(cur)
+                    # a single word longer than the line: hard-split it
+                    while d.textlength(w, font = fnt) > max_w and len(w) > 1:
+                        cut = len(w)
+                        while cut > 1 and d.textlength(w[:cut], font = fnt) > max_w:
+                            cut -= 1
+                        out.append(w[:cut])
+                        w = w[cut:]
+                    cur = w
+            if cur:
+                out.append(cur)
+        return out
+
+    lines = wrap(text, font)
+    asc, desc = font.getmetrics()
+    lh = asc + desc + line_gap
+    usable_h = H - 2 * margin
+    per_page = max(1, usable_h // lh)
+    pages = []
+    i = 0
+    while i < len(lines):
+        chunk = lines[i:i + per_page]
+        i += per_page
+        img = Image.new('RGB', (W, H), bg)
+        dr = ImageDraw.Draw(img)
+        y = margin
+        for ln in chunk:
+            disp = ln[::-1]
+            tw = dr.textlength(disp, font = font)
+            dr.text((W - margin - tw, y), disp, font = font, fill = fg)
+            y += lh
+        pages.append(img)
+    if not pages:
+        pages.append(Image.new('RGB', (W, H), bg))
+    return pages
+
+
 class ZoomDialog(tk.Toplevel):
     '''
 Full 2x HD Zoom preview modal (480x640) for inspecting fine wallpaper details.
@@ -1350,6 +1437,97 @@ Displays 1:1 native 240x320 preview for maximum clarity.
             os.remove(sjpg_dest)
             return None
 
+
+
+class TextToWallpaperDialog(tk.Toplevel):
+    '''
+Turns a long (Hebrew) text into a series of wallpaper images and assigns them
+to consecutive slots, so long content (e.g. Birkat Hamazon) can live on the
+device across several wallpapers instead of the tiny fixed text fields.
+'''
+
+    def __init__(self, parent, start_slot = 20):
+        super().__init__(parent)
+        self.parent = parent
+        self.title('📖 טקסט לטפט')
+        self.geometry('540x640')
+        self.resizable(False, False)
+        self.configure(bg = '#22252a')
+        self.transient(parent)
+        self.grab_set()
+        self._start_default = max(1, min(TOTAL_WALLPAPERS, start_slot))
+        self._build_ui()
+
+    def _build_ui(self):
+        tk.Label(self, text = 'טקסט לטפט (לדוגמה: ברכת המזון)', font = ('Segoe UI', 13, 'bold'), fg = '#06d6a0', bg = '#22252a').pack(pady = (12, 2))
+        tk.Label(self, text = 'הדבק טקסט ארוך; הוא יחולק אוטומטית לכמה טפטים קריאים.', font = ('Segoe UI', 9), fg = '#adb5bd', bg = '#22252a').pack(pady = (0, 8))
+        txt_frame = tk.Frame(self, bg = '#22252a')
+        txt_frame.pack(fill = 'both', expand = True, padx = 16)
+        self.txt = tk.Text(txt_frame, height = 12, font = ('David', 13), bg = '#111215', fg = '#f8f9fa', insertbackground = '#06d6a0', wrap = 'word')
+        self.txt.pack(side = 'right', fill = 'both', expand = True)
+        sb = tk.Scrollbar(txt_frame, command = self.txt.yview)
+        sb.pack(side = 'left', fill = 'y')
+        self.txt.config(yscrollcommand = sb.set)
+        opts = tk.Frame(self, bg = '#22252a')
+        opts.pack(fill = 'x', padx = 16, pady = 8)
+        tk.Label(opts, text = 'טפט התחלה:', font = ('Segoe UI', 9, 'bold'), fg = '#f8f9fa', bg = '#22252a').pack(side = 'right', padx = (6, 2))
+        self.spn_start = tk.Spinbox(opts, from_ = 1, to = TOTAL_WALLPAPERS, width = 5, font = ('Segoe UI', 10), justify = 'center', bg = '#111215', fg = '#06d6a0')
+        self.spn_start.delete(0, 'end')
+        self.spn_start.insert(0, str(self._start_default))
+        self.spn_start.pack(side = 'right')
+        tk.Label(opts, text = 'גודל גופן:', font = ('Segoe UI', 9, 'bold'), fg = '#f8f9fa', bg = '#22252a').pack(side = 'right', padx = (16, 2))
+        self.spn_font = tk.Spinbox(opts, from_ = 12, to = 40, width = 4, font = ('Segoe UI', 10), justify = 'center', bg = '#111215', fg = '#06d6a0')
+        self.spn_font.delete(0, 'end')
+        self.spn_font.insert(0, '20')
+        self.spn_font.pack(side = 'right')
+        self.lbl_info = tk.Label(self, text = '', font = ('Segoe UI', 9), fg = '#ffd166', bg = '#22252a')
+        self.lbl_info.pack(pady = (0, 4))
+        btns = tk.Frame(self, bg = '#22252a')
+        btns.pack(fill = 'x', padx = 16, pady = (0, 14))
+        tk.Button(btns, text = '✔ צור והקצה לטפטים', font = ('Segoe UI', 11, 'bold'), bg = '#06d6a0', fg = '#111215', activebackground = '#05b888', relief = 'flat', padx = 16, pady = 6, cursor = 'hand2', command = self._generate).pack(side = 'right', padx = 6)
+        tk.Button(btns, text = '👁 תצוגה מקדימה', font = ('Segoe UI', 10), bg = '#2a475e', fg = '#f8f9fa', relief = 'flat', padx = 12, pady = 6, cursor = 'hand2', command = self._preview).pack(side = 'right', padx = 6)
+        tk.Button(btns, text = 'ביטול', font = ('Segoe UI', 10), bg = '#3d405b', fg = '#f8f9fa', relief = 'flat', padx = 12, pady = 6, cursor = 'hand2', command = self.destroy).pack(side = 'left', padx = 6)
+
+    def _render(self):
+        text = self.txt.get('1.0', 'end').strip()
+        if not text:
+            messagebox.showwarning('אין טקסט', 'הדבק טקסט תחילה.')
+            return (None, None, None)
+        try:
+            fs = int(self.spn_font.get())
+        except Exception:
+            fs = 20
+        try:
+            start = int(self.spn_start.get())
+        except Exception:
+            start = self._start_default
+        pages = render_text_to_wallpapers(text, font_size = fs)
+        return (pages, start, fs)
+
+    def _preview(self):
+        pages, start, fs = self._render()
+        if pages is None:
+            return None
+        n = len(pages)
+        end = start + n - 1
+        note = '' if end <= TOTAL_WALLPAPERS else f'  ⚠ חורג! צריך עד טפט {end}.'
+        self.lbl_info.config(text = f'ייווצרו {n} טפטים: #{start} עד #{end}.{note}')
+        ZoomDialog(self, pages[0], start)
+
+    def _generate(self):
+        pages, start, fs = self._render()
+        if pages is None:
+            return None
+        n = len(pages)
+        end = start + n - 1
+        if end > TOTAL_WALLPAPERS:
+            messagebox.showerror('אין מספיק טפטים', f'הטקסט דורש {n} טפטים (#{start} עד #{end}), אבל יש רק {TOTAL_WALLPAPERS}.\nבחר טפט התחלה נמוך יותר או הגדל את הגופן (פחות טפטים).')
+            return None
+        for k, img in enumerate(pages):
+            self.parent._assign_custom_image(start + k, img)
+        self.parent.lbl_status.config(text = f'‏נוצרו {n} טפטי טקסט (#{start}–#{end}). לחץ \'החל והכן לצריבה\' לצריבה למכשיר.')
+        messagebox.showinfo('נוצר בהצלחה', f'הטקסט חולק ל-{n} טפטים (#{start} עד #{end}).\nלחץ על \'החל והכן לצריבה בתוכנת WOT\' כדי לצרוב.')
+        self.destroy()
 
 
 class WallpaperSwapDialog(tk.Toplevel):
@@ -1676,6 +1854,8 @@ class Q8WallpaperStudio(tk.Tk):
         btn_refresh_wot.pack(side = 'left', padx = 4)
         btn_reset_all = tk.Button(actions_frame, text = '‏↺ איפוס הכל למקור', font = ('Segoe UI', 9), bg = '#3d405b', fg = '#f8f9fa', relief = 'flat', padx = 8, pady = 6, cursor = 'hand2', command = self.reset_all_wallpapers)
         btn_reset_all.pack(side = 'left', padx = 4)
+        btn_text2wp = tk.Button(actions_frame, text = '‏📖 טקסט לטפט', font = ('Segoe UI', 9, 'bold'), bg = '#6f42c1', fg = '#ffffff', activebackground = '#5a32a3', activeforeground = '#ffffff', relief = 'flat', padx = 8, pady = 6, cursor = 'hand2', command = self.open_text_to_wallpaper_dialog)
+        btn_text2wp.pack(side = 'left', padx = 4)
 
     
     def _build_tabs(self):
@@ -2982,6 +3162,33 @@ class Q8WallpaperStudio(tk.Tk):
             return None
 
     
+    def open_text_to_wallpaper_dialog(self):
+        '''Opens the text-to-wallpaper tool (e.g. for Birkat Hamazon).'''
+        start = self.selected_slot if getattr(self, 'selected_slot', None) else 20
+        TextToWallpaperDialog(self, start_slot = start)
+
+    def _assign_custom_image(self, slot, img):
+        '''Assigns a rendered PIL image to a slot as a custom wallpaper.'''
+        if slot not in self.slot_state:
+            self.slot_state[slot] = { }
+        self.slot_state[slot]['image'] = img
+        self.slot_state[slot]['sjpg'] = None
+        self.slot_state[slot]['is_custom'] = True
+        try:
+            img.save(os.path.join(CUSTOM_WP_DIR, f'''wp_{slot}.png'''), format = 'PNG')
+        except Exception:
+            pass
+        sjpg_path = os.path.join(CUSTOM_WP_DIR, f'''wp_{slot}.sjpg''')
+        if os.path.exists(sjpg_path):
+            try:
+                os.remove(sjpg_path)
+            except Exception:
+                pass
+        try:
+            self._update_single_card(slot)
+        except Exception:
+            pass
+
     def replace_wallpaper(self, slot):
         '''קבצי תמונה'''
         filetypes = [
