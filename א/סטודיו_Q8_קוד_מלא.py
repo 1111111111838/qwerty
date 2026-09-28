@@ -1,11 +1,9 @@
 # ============================================================
 # Studio Q8 - Wallpaper Studio  (single-file build, application code only)
-# Recovered from the packaged executable and repaired to run as ONE module.
-# Intra-app imports removed and aliased below; importlib.reload() removed.
-# Recovery/features: infinite-while fixes; SJPG quant x8; q_idx=2 device format;
-# adaptive wallpaper packing; Text-to-Wallpaper; ABM icon codec (decode+encode)
-# and custom menu-icon replacement. Errors -> q8_build_error.log; DLL write needs
-# Administrator. Marks: "NOTE(recovery)".
+# Recovered from the packaged executable; runs as ONE module (intra-app imports
+# aliased). Features: wallpapers, theme colors, text replace, Text-to-Wallpaper,
+# ABM icon codec + custom menu-icon replacement. Errors -> q8_build_error.log;
+# DLL write needs Administrator. Marks: "NOTE(recovery)".
 # ============================================================
 
 import sys as _sys
@@ -1744,7 +1742,7 @@ to the device ABM format at deploy time.
         self._build_ui()
 
     def _load_originals(self):
-        import mmi_builder, spd_sjpg, struct
+        import struct
         res = {}
         try:
             with open(mmi_builder.MMI_DUMP_PATH, 'rb') as f:

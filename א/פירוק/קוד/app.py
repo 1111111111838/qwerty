@@ -361,7 +361,7 @@ to the device ABM format at deploy time.
         self._build_ui()
 
     def _load_originals(self):
-        import mmi_builder, spd_sjpg, struct
+        import struct
         res = {}
         try:
             with open(mmi_builder.MMI_DUMP_PATH, 'rb') as f:
