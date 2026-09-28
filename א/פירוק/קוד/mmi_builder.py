@@ -230,11 +230,11 @@ that do not fit even at minimum quality are left unchanged.
         except Exception:
             W, H, topY, topX, bottomY, bottomX = 68, 66, 9, 5, 5, 11
         enc = None
-        for maxcol in (0, 200, 128, 96, 64, 48, 32):
-            im2 = img
-            if maxcol:
-                im2 = img.convert('RGB').quantize(colors=maxcol).convert('RGB')
-            cand = spd_sjpg.encode_abm_icon(im2, W=W, H=H, topY=topY, topX=topX, bottomY=bottomY, bottomX=bottomX)
+        # Try richest palette first, then shrink colors until it fits the slot.
+        # Never above 256 (encoder enforces this too) so the device stays on its
+        # palette decode path; large/detailed icons keep dropping colors to fit.
+        for maxcol in (256, 200, 128, 96, 64, 48, 32, 24, 16, 12, 8, 6, 4):
+            cand = spd_sjpg.encode_abm_icon(img, W=W, H=H, topY=topY, topX=topX, bottomY=bottomY, bottomX=bottomX, max_colors=maxcol)
             if len(cand) <= cap:
                 enc = cand
                 break

@@ -76,10 +76,17 @@ def decode_abm(data):
     return out
 
 
-def encode_abm_icon(img, W=68, H=66, topY=9, topX=5, bottomY=5, bottomX=11, bg=(255, 255, 255)):
+def encode_abm_icon(img, W=68, H=66, topY=9, topX=5, bottomY=5, bottomX=11, bg=(255, 255, 255), max_colors=256):
     '''
 Encode a PIL image to a device-format ABM icon (opaque, composited over bg so
 the menu background shows through cleanly). Matches the stock icon geometry.
+
+CRITICAL: the palette must never exceed 256 colors. The device decoder has two
+paths -- a palette path for noColors <= 256 and an RGB-direct path for > 256.
+The firmware's menu-icon renderer only handles the palette path; feeding it a
+>256-color icon overflows its buffer and reboots the phone on menu entry. We
+therefore always quantize down to at most 256 (and `max_colors` lets the caller
+shrink further so a detailed icon fits its slot capacity).
 '''
     aw = W - bottomX - topX
     ah = H - bottomY - topY
@@ -87,14 +94,16 @@ the menu background shows through cleanly). Matches the stock icon geometry.
     base = Image.new('RGBA', (aw, ah), tuple(bg) + (255,))
     base.alpha_composite(im)
     rgb = base.convert('RGB')
+    cap_colors = max(2, min(int(max_colors), 256))
     pix = list(rgb.getdata())
     c565 = [_rgb_to_565(r, g, b) for (r, g, b) in pix]
     uniq = sorted(set(c565))
-    if len(uniq) > 512:
-        q = rgb.quantize(colors=256, method=Image.MEDIANCUT)
-        qp = q.getpalette()
+    if len(uniq) > cap_colors:
+        q = rgb.quantize(colors=cap_colors, method=Image.MEDIANCUT)
+        qp = q.getpalette() or []
+        ncol = len(qp) // 3
         qi = list(q.getdata())
-        qcol = [_rgb_to_565(qp[i * 3], qp[i * 3 + 1], qp[i * 3 + 2]) for i in range(256)]
+        qcol = [_rgb_to_565(qp[i * 3], qp[i * 3 + 1], qp[i * 3 + 2]) for i in range(ncol)]
         uniq = sorted(set(qcol))
         idxmap = {c: i for i, c in enumerate(uniq)}
         indices = [idxmap[qcol[qi[k]]] for k in range(len(qi))]
