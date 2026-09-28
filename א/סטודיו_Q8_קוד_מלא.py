@@ -135,18 +135,62 @@ the menu background shows through cleanly). Matches the stock icon geometry.
     out += struct.pack('>HHHHBBBB', W, H, noColor, noAlpha, topY, topX, bottomY, bottomX)
     for c in uniq:
         out += struct.pack('>H', c)
-    ctrl = bytearray()
-    bits = []
+    # Build run-length segments (value, length).
+    segs = []
     i = 0
     n = len(indices)
     while i < n:
         j = i
-        while j < n and indices[j] == indices[i] and (j - i) < 254:
+        while j < n and indices[j] == indices[i]:
             j += 1
-        ctrl.append(0)
-        ctrl.append(j - i)
-        bits.append(indices[i])
+        segs.append((indices[i], j - i))
         i = j
+    # Emit control pairs (pixels, count). A pair reads `pixels` individual
+    # palette indices, then (if count > 0) one more index repeated `count`
+    # times. Runs of length 1 are batched as literals so the 2-byte control
+    # overhead is amortized across up to 255 pixels instead of paid per pixel
+    # (the old scheme cost 2 ctrl bytes for every single pixel in noisy areas,
+    # which blew detailed icons past their slot capacity).
+    ctrl = bytearray()
+    bits = []
+    lit = []
+
+    def _flush_lit():
+        k = 0
+        while k < len(lit):
+            chunk = lit[k:k + 255]
+            ctrl.append(len(chunk))
+            ctrl.append(0)
+            bits.extend(chunk)
+            k += 255
+        lit.clear()
+
+    for val, length in segs:
+        if length == 1:
+            lit.append(val)
+            continue
+        while len(lit) > 255:
+            ctrl.append(255)
+            ctrl.append(0)
+            bits.extend(lit[:255])
+            del lit[:255]
+        rem = length
+        first = True
+        while rem > 0:
+            take = rem if rem < 255 else 255
+            if first:
+                ctrl.append(len(lit))
+                ctrl.append(take)
+                bits.extend(lit)
+                bits.append(val)
+                lit.clear()
+                first = False
+            else:
+                ctrl.append(0)
+                ctrl.append(take)
+                bits.append(val)
+            rem -= take
+    _flush_lit()
     bitbuf = []
     for idx in bits:
         for k in range(bpp):
