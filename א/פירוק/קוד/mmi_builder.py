@@ -202,11 +202,13 @@ def prepare_slots_61_70(slot_inputs, orig_mmi):
 MENU_ICON_INDICES = [227, 229, 231, 233, 235, 237, 241, 243, 251]
 
 # Maps a normal menu-icon index -> its "selected/highlighted" LIST0 index (the
-# variant shown with the shadow + check badge when the item is focused). These
-# are not at a fixed offset and the icons are too stylistically similar to detect
-# reliably by shape, so they are mapped from the exported icon atlas. Empty until
-# the atlas is inspected; when empty, selected variants are left unchanged.
-SELECTED_ICON_INDICES = {}
+# variant shown with the shadow + check badge when the item is focused). Read off
+# the exported icon atlas: every selected variant sits at normal_index + 1 (e.g.
+# 228 = phone+check, 230 = person+check, 234 = gear+check, 236 = bluetooth+check).
+SELECTED_ICON_INDICES = {
+    227: 228, 229: 230, 231: 232, 233: 234, 235: 236,
+    237: 238, 241: 242, 243: 244, 251: 252,
+}
 
 
 def _list0_slot(orig, idx):
