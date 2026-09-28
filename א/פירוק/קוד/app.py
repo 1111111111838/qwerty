@@ -340,6 +340,88 @@ device across several wallpapers instead of the tiny fixed text fields.
         self.destroy()
 
 
+class IconReplaceDialog(tk.Toplevel):
+    '''
+Replace the 9 main menu icons with custom images. Shows each original icon
+(decoded from the MMI) so the user knows which is which, then lets them pick a
+replacement image per icon. Chosen images are stored on the parent and encoded
+to the device ABM format at deploy time.
+'''
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title('🎨 החלפת אייקונים')
+        self.geometry('560x520')
+        self.configure(bg = '#22252a')
+        self.transient(parent)
+        self.grab_set()
+        self._thumbs = {}
+        self._orig_imgs = self._load_originals()
+        self._build_ui()
+
+    def _load_originals(self):
+        import mmi_builder, spd_sjpg, struct
+        res = {}
+        try:
+            with open(mmi_builder.MMI_DUMP_PATH, 'rb') as f:
+                d = f.read()
+            for pos, idx in enumerate(mmi_builder.MENU_ICON_INDICES):
+                try:
+                    rel = struct.unpack_from('<I', d, mmi_builder.LIST0_OFFSETS_OFF + idx * 4)[0]
+                    sz = struct.unpack_from('<I', d, mmi_builder.LIST0_INFO_OFF + idx * 12 + 8)[0]
+                    ab = mmi_builder.LIST0_P0 + rel
+                    res[pos] = spd_sjpg.decode_abm(d[ab:ab + sz])
+                except Exception:
+                    res[pos] = None
+        except Exception:
+            pass
+        return res
+
+    def _build_ui(self):
+        tk.Label(self, text = 'החלפת אייקוני התפריט הראשי (9 אייקונים)', font = ('Segoe UI', 13, 'bold'), fg = '#06d6a0', bg = '#22252a').pack(pady = (12, 2))
+        tk.Label(self, text = 'לחץ על אייקון כדי לבחור תמונה שתחליף אותו. רקע לבן מומלץ.', font = ('Segoe UI', 9), fg = '#adb5bd', bg = '#22252a').pack(pady = (0, 8))
+        grid = tk.Frame(self, bg = '#22252a')
+        grid.pack(padx = 12, pady = 6)
+        for pos in range(9):
+            r, c = divmod(pos, 3)
+            cell = tk.Frame(grid, bg = '#1a1c23', padx = 6, pady = 6, highlightthickness = 1, highlightbackground = '#343a40')
+            cell.grid(row = r, column = c, padx = 6, pady = 6)
+            cv = tk.Canvas(cell, width = 56, height = 56, bg = '#ffffff', highlightthickness = 0, cursor = 'hand2')
+            cv.pack()
+            self._render_thumb(cv, pos)
+            cv.bind('<Button-1>', (lambda e, p = pos, canvas = cv: self._pick(p, canvas)))
+            tk.Button(cell, text = 'בחר', font = ('Segoe UI', 8), bg = '#2a475e', fg = '#fff', relief = 'flat', cursor = 'hand2', command = (lambda p = pos, canvas = cv: self._pick(p, canvas))).pack(pady = (4, 0))
+        btns = tk.Frame(self, bg = '#22252a')
+        btns.pack(fill = 'x', padx = 16, pady = 12)
+        tk.Button(btns, text = '✔ סגור', font = ('Segoe UI', 11, 'bold'), bg = '#06d6a0', fg = '#111215', relief = 'flat', padx = 16, pady = 6, cursor = 'hand2', command = self.destroy).pack(side = 'right', padx = 6)
+        tk.Label(self, text = 'לאחר בחירה, לחץ "החל והכן לצריבה" במסך הראשי.', font = ('Segoe UI', 9), fg = '#ffd166', bg = '#22252a').pack(pady = (0, 6))
+
+    def _render_thumb(self, canvas, pos):
+        img = self.parent.custom_icons.get(pos) or self._orig_imgs.get(pos)
+        if img is None:
+            return
+        disp = Image.new('RGBA', (56, 56), (255, 255, 255, 255))
+        disp.alpha_composite(img.convert('RGBA').resize((56, 56), Image.LANCZOS))
+        ph = ImageTk.PhotoImage(disp.convert('RGB'))
+        self._thumbs[pos] = ph
+        canvas.delete('all')
+        canvas.create_image(28, 28, image = ph)
+
+    def _pick(self, pos, canvas):
+        path = filedialog.askopenfilename(title = f'''בחר תמונה לאייקון #{pos + 1}''', filetypes = [('קבצי תמונה', '*.png;*.jpg;*.jpeg;*.webp;*.bmp'), ('כל הקבצים', '*.*')])
+        if not path:
+            return None
+        try:
+            im = Image.open(path).convert('RGBA')
+        except Exception as e:
+            messagebox.showerror('שגיאה', f'''לא ניתן לפתוח את התמונה:\n{e}''')
+            return None
+        self.parent.custom_icons[pos] = im
+        self._render_thumb(canvas, pos)
+        self.parent.lbl_status.config(text = f'''‏אייקון #{pos + 1} נבחר. לחץ \'החל והכן לצריבה\' לצריבה.''')
+
+
 class WallpaperSwapDialog(tk.Toplevel):
     '''
 Dialog for swapping / reordering wallpaper positions between two slots.
@@ -567,6 +649,7 @@ class Q8WallpaperStudio(tk.Tk):
 
         self.slot_state = { }
         self.thumb_images = { }
+        self.custom_icons = { }
         self.selected_slot = 1
         self.current_cols = 4
         self.is_deploying = False
@@ -666,6 +749,8 @@ class Q8WallpaperStudio(tk.Tk):
         btn_reset_all.pack(side = 'left', padx = 4)
         btn_text2wp = tk.Button(actions_frame, text = '‏📖 טקסט לטפט', font = ('Segoe UI', 9, 'bold'), bg = '#6f42c1', fg = '#ffffff', activebackground = '#5a32a3', activeforeground = '#ffffff', relief = 'flat', padx = 8, pady = 6, cursor = 'hand2', command = self.open_text_to_wallpaper_dialog)
         btn_text2wp.pack(side = 'left', padx = 4)
+        btn_icons = tk.Button(actions_frame, text = '‏🎨 החלף אייקונים', font = ('Segoe UI', 9, 'bold'), bg = '#e07b39', fg = '#ffffff', activebackground = '#c96522', activeforeground = '#ffffff', relief = 'flat', padx = 8, pady = 6, cursor = 'hand2', command = self.open_icon_dialog)
+        btn_icons.pack(side = 'left', padx = 4)
 
     
     def _build_tabs(self):
@@ -1977,6 +2062,10 @@ class Q8WallpaperStudio(tk.Tk):
         start = self.selected_slot if getattr(self, 'selected_slot', None) else 20
         TextToWallpaperDialog(self, start_slot = start)
 
+    def open_icon_dialog(self):
+        '''Opens the custom menu-icon replacement tool.'''
+        IconReplaceDialog(self)
+
     def _assign_custom_image(self, slot, img):
         '''Assigns a rendered PIL image to a slot as a custom wallpaper.'''
         if slot not in self.slot_state:
@@ -2155,7 +2244,8 @@ class Q8WallpaperStudio(tk.Tk):
                     custom_wallpapers[slot] = Image.open(png_p).convert('RGB')
                 self.post_ui((lambda : self.lbl_status.config(text = '‏בונה את קובץ המשאבים, הטקסטים וערכת הנושא...')))
                 use_icons = self.use_unisoc_icons.get() if hasattr(self, 'use_unisoc_icons') else False
-                orig, mod = mmi_builder.build_modified_mmi(custom_wallpapers, theme_hex = self.confirmed_theme_hex, use_unisoc_icons = use_icons)
+                cust_icons = {p: v for p, v in self.custom_icons.items() if v is not None}
+                orig, mod = mmi_builder.build_modified_mmi(custom_wallpapers, theme_hex = self.confirmed_theme_hex, use_unisoc_icons = use_icons, custom_icons = cust_icons or None)
                 # DEBUG(recovery): save the encoded SJPG of the first few custom slots
                 # so their exact bytes can be compared against real device slots.
                 try:

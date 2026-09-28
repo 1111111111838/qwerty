@@ -8,6 +8,140 @@ Based on official Unisoc quantization tables and Huffman data.
 import io
 import struct
 from PIL import Image, ImageOps, ImageFilter
+
+
+# ============================================================
+# ABM icon codec (Spreadtrum/Unisoc). Recovered by reverse-engineering the
+# device's own icons: 'ABM' + type + header, RGB565 color palette, optional
+# alpha region, then an RLE control stream + LSB-first bit-packed indices.
+# encode_abm_icon() produces a device-format opaque icon (composited over a
+# background), validated by round-tripping the stock icons.
+# ============================================================
+def _rgb_to_565(r, g, b):
+    return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+
+
+def decode_abm(data):
+    '''Decode an ABM icon to an RGBA PIL image.'''
+    W, H, noColor, noAlpha, topY, topX, bottomY, bottomX = struct.unpack('>HHHHBBBB', data[4:16])
+    noColors = noColor + noAlpha
+    aw = W - bottomX - topX
+    ah = H - bottomY - topY
+    colors = [data[16 + i * 2:16 + i * 2 + 2] for i in range(noColors)]
+    ab_len = ((noAlpha - 1) // 2) * 2 if noAlpha > 0 else 0
+    astart = 16 + noColors * 2
+    A = [255] * noColor + list(data[astart:astart + ab_len])
+    A = (A + [255] * noColors)[:noColors]
+    off = astart + ab_len
+    bio = io.BytesIO(data)
+    bio.seek(off)
+    cmp_len = int.from_bytes(bio.read(4), 'little')
+    cmp_data = bio.read(cmp_len)
+    co = 0
+    state = {'n': 65536 | int.from_bytes(bio.read(2), 'little')}
+
+    def rb(p):
+        t = 0
+        for k in range(p):
+            t |= (state['n'] & 1) << k
+            state['n'] >>= 1
+            if state['n'] == 1:
+                w = bio.read(2)
+                state['n'] = 65536 | int.from_bytes(w, 'little') if len(w) == 2 else 1
+        return t
+
+    nc = noColors - 1
+    bpp = 0
+    while nc:
+        bpp += 1
+        nc >>= 1
+    td = bytearray()
+    ta = bytearray()
+    while len(ta) < aw * ah and co + 1 < len(cmp_data):
+        px, cnt = cmp_data[co], cmp_data[co + 1]
+        co += 2
+        for _ in range(px):
+            pix = min(rb(bpp), noColors - 1)
+            td += colors[pix][1:2] + colors[pix][0:1]
+            ta += bytes([A[pix]])
+        if cnt > 0:
+            pix = min(rb(bpp), noColors - 1)
+            td += (colors[pix][1:2] + colors[pix][0:1]) * cnt
+            ta += bytes([A[pix]]) * cnt
+    td = (bytes(td) + b'\x00' * (aw * ah * 2))[:aw * ah * 2]
+    ta = (bytes(ta) + b'\x00' * (aw * ah))[:aw * ah]
+    col = Image.frombytes('RGB', (aw, ah), td, 'raw', 'BGR;16', 0, 1)
+    out = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    out.paste(col, (topX, topY), Image.frombytes('L', (aw, ah), ta))
+    return out
+
+
+def encode_abm_icon(img, W=68, H=66, topY=9, topX=5, bottomY=5, bottomX=11, bg=(255, 255, 255)):
+    '''
+Encode a PIL image to a device-format ABM icon (opaque, composited over bg so
+the menu background shows through cleanly). Matches the stock icon geometry.
+'''
+    aw = W - bottomX - topX
+    ah = H - bottomY - topY
+    im = img.convert('RGBA').resize((aw, ah), Image.LANCZOS)
+    base = Image.new('RGBA', (aw, ah), tuple(bg) + (255,))
+    base.alpha_composite(im)
+    rgb = base.convert('RGB')
+    pix = list(rgb.getdata())
+    c565 = [_rgb_to_565(r, g, b) for (r, g, b) in pix]
+    uniq = sorted(set(c565))
+    if len(uniq) > 512:
+        q = rgb.quantize(colors=256, method=Image.MEDIANCUT)
+        qp = q.getpalette()
+        qi = list(q.getdata())
+        qcol = [_rgb_to_565(qp[i * 3], qp[i * 3 + 1], qp[i * 3 + 2]) for i in range(256)]
+        uniq = sorted(set(qcol))
+        idxmap = {c: i for i, c in enumerate(uniq)}
+        indices = [idxmap[qcol[qi[k]]] for k in range(len(qi))]
+    else:
+        idxmap = {c: i for i, c in enumerate(uniq)}
+        indices = [idxmap[c] for c in c565]
+    noColor = len(uniq)
+    noAlpha = 0
+    noColors = noColor
+    nc = noColors - 1
+    bpp = 0
+    while nc:
+        bpp += 1
+        nc >>= 1
+    if bpp == 0:
+        bpp = 1
+    out = bytearray(b'ABM')
+    out.append(0x52)
+    out += struct.pack('>HHHHBBBB', W, H, noColor, noAlpha, topY, topX, bottomY, bottomX)
+    for c in uniq:
+        out += struct.pack('>H', c)
+    ctrl = bytearray()
+    bits = []
+    i = 0
+    n = len(indices)
+    while i < n:
+        j = i
+        while j < n and indices[j] == indices[i] and (j - i) < 254:
+            j += 1
+        ctrl.append(0)
+        ctrl.append(j - i)
+        bits.append(indices[i])
+        i = j
+    bitbuf = []
+    for idx in bits:
+        for k in range(bpp):
+            bitbuf.append((idx >> k) & 1)
+    words = bytearray()
+    for w in range(0, len(bitbuf), 16):
+        val = 0
+        for b_i, bit in enumerate(bitbuf[w:w + 16]):
+            val |= bit << b_i
+        words += struct.pack('<H', val)
+    out += struct.pack('<I', len(ctrl))
+    out += ctrl
+    out += words
+    return bytes(out)
 # NOTE(recovery): the JPEG-style tables below were mangled by the decompiler into
 # chained subscripts. ZZ_INDEX is the exact standard JPEG zig-zag order.
 # JPG_HUFF_DATA is the fully-recovered 420-byte DHT segment. The quant tables

@@ -2,12 +2,10 @@
 # Studio Q8 - Wallpaper Studio  (single-file build, application code only)
 # Recovered from the packaged executable and repaired to run as ONE module.
 # Intra-app imports removed and aliased below; importlib.reload() removed.
-# Recovery fixes: infinite-while artifacts restored; SJPG quant tables scaled x8;
-# re-encode uses q_idx=2 (device stock format); packing caches stock decode and
-# bounds blur loops; low/slot-1 blur-to-fit or keep original.
-# Feature: "Text to Wallpaper" (render long Hebrew text like Birkat Hamazon into
-# multiple wallpapers). Errors -> q8_build_error.log; DLL write needs Administrator.
-# Marks: "NOTE(recovery)".
+# Recovery/features: infinite-while fixes; SJPG quant x8; q_idx=2 device format;
+# adaptive wallpaper packing; Text-to-Wallpaper; ABM icon codec (decode+encode)
+# and custom menu-icon replacement. Errors -> q8_build_error.log; DLL write needs
+# Administrator. Marks: "NOTE(recovery)".
 # ============================================================
 
 import sys as _sys
@@ -31,6 +29,140 @@ Based on official Unisoc quantization tables and Huffman data.
 import io
 import struct
 from PIL import Image, ImageOps, ImageFilter
+
+
+# ============================================================
+# ABM icon codec (Spreadtrum/Unisoc). Recovered by reverse-engineering the
+# device's own icons: 'ABM' + type + header, RGB565 color palette, optional
+# alpha region, then an RLE control stream + LSB-first bit-packed indices.
+# encode_abm_icon() produces a device-format opaque icon (composited over a
+# background), validated by round-tripping the stock icons.
+# ============================================================
+def _rgb_to_565(r, g, b):
+    return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+
+
+def decode_abm(data):
+    '''Decode an ABM icon to an RGBA PIL image.'''
+    W, H, noColor, noAlpha, topY, topX, bottomY, bottomX = struct.unpack('>HHHHBBBB', data[4:16])
+    noColors = noColor + noAlpha
+    aw = W - bottomX - topX
+    ah = H - bottomY - topY
+    colors = [data[16 + i * 2:16 + i * 2 + 2] for i in range(noColors)]
+    ab_len = ((noAlpha - 1) // 2) * 2 if noAlpha > 0 else 0
+    astart = 16 + noColors * 2
+    A = [255] * noColor + list(data[astart:astart + ab_len])
+    A = (A + [255] * noColors)[:noColors]
+    off = astart + ab_len
+    bio = io.BytesIO(data)
+    bio.seek(off)
+    cmp_len = int.from_bytes(bio.read(4), 'little')
+    cmp_data = bio.read(cmp_len)
+    co = 0
+    state = {'n': 65536 | int.from_bytes(bio.read(2), 'little')}
+
+    def rb(p):
+        t = 0
+        for k in range(p):
+            t |= (state['n'] & 1) << k
+            state['n'] >>= 1
+            if state['n'] == 1:
+                w = bio.read(2)
+                state['n'] = 65536 | int.from_bytes(w, 'little') if len(w) == 2 else 1
+        return t
+
+    nc = noColors - 1
+    bpp = 0
+    while nc:
+        bpp += 1
+        nc >>= 1
+    td = bytearray()
+    ta = bytearray()
+    while len(ta) < aw * ah and co + 1 < len(cmp_data):
+        px, cnt = cmp_data[co], cmp_data[co + 1]
+        co += 2
+        for _ in range(px):
+            pix = min(rb(bpp), noColors - 1)
+            td += colors[pix][1:2] + colors[pix][0:1]
+            ta += bytes([A[pix]])
+        if cnt > 0:
+            pix = min(rb(bpp), noColors - 1)
+            td += (colors[pix][1:2] + colors[pix][0:1]) * cnt
+            ta += bytes([A[pix]]) * cnt
+    td = (bytes(td) + b'\x00' * (aw * ah * 2))[:aw * ah * 2]
+    ta = (bytes(ta) + b'\x00' * (aw * ah))[:aw * ah]
+    col = Image.frombytes('RGB', (aw, ah), td, 'raw', 'BGR;16', 0, 1)
+    out = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    out.paste(col, (topX, topY), Image.frombytes('L', (aw, ah), ta))
+    return out
+
+
+def encode_abm_icon(img, W=68, H=66, topY=9, topX=5, bottomY=5, bottomX=11, bg=(255, 255, 255)):
+    '''
+Encode a PIL image to a device-format ABM icon (opaque, composited over bg so
+the menu background shows through cleanly). Matches the stock icon geometry.
+'''
+    aw = W - bottomX - topX
+    ah = H - bottomY - topY
+    im = img.convert('RGBA').resize((aw, ah), Image.LANCZOS)
+    base = Image.new('RGBA', (aw, ah), tuple(bg) + (255,))
+    base.alpha_composite(im)
+    rgb = base.convert('RGB')
+    pix = list(rgb.getdata())
+    c565 = [_rgb_to_565(r, g, b) for (r, g, b) in pix]
+    uniq = sorted(set(c565))
+    if len(uniq) > 512:
+        q = rgb.quantize(colors=256, method=Image.MEDIANCUT)
+        qp = q.getpalette()
+        qi = list(q.getdata())
+        qcol = [_rgb_to_565(qp[i * 3], qp[i * 3 + 1], qp[i * 3 + 2]) for i in range(256)]
+        uniq = sorted(set(qcol))
+        idxmap = {c: i for i, c in enumerate(uniq)}
+        indices = [idxmap[qcol[qi[k]]] for k in range(len(qi))]
+    else:
+        idxmap = {c: i for i, c in enumerate(uniq)}
+        indices = [idxmap[c] for c in c565]
+    noColor = len(uniq)
+    noAlpha = 0
+    noColors = noColor
+    nc = noColors - 1
+    bpp = 0
+    while nc:
+        bpp += 1
+        nc >>= 1
+    if bpp == 0:
+        bpp = 1
+    out = bytearray(b'ABM')
+    out.append(0x52)
+    out += struct.pack('>HHHHBBBB', W, H, noColor, noAlpha, topY, topX, bottomY, bottomX)
+    for c in uniq:
+        out += struct.pack('>H', c)
+    ctrl = bytearray()
+    bits = []
+    i = 0
+    n = len(indices)
+    while i < n:
+        j = i
+        while j < n and indices[j] == indices[i] and (j - i) < 254:
+            j += 1
+        ctrl.append(0)
+        ctrl.append(j - i)
+        bits.append(indices[i])
+        i = j
+    bitbuf = []
+    for idx in bits:
+        for k in range(bpp):
+            bitbuf.append((idx >> k) & 1)
+    words = bytearray()
+    for w in range(0, len(bitbuf), 16):
+        val = 0
+        for b_i, bit in enumerate(bitbuf[w:w + 16]):
+            val |= bit << b_i
+        words += struct.pack('<H', val)
+    out += struct.pack('<I', len(ctrl))
+    out += ctrl
+    out += words
+    return bytes(out)
 # NOTE(recovery): the JPEG-style tables below were mangled by the decompiler into
 # chained subscripts. ZZ_INDEX is the exact standard JPEG zig-zag order.
 # JPG_HUFF_DATA is the fully-recovered 420-byte DHT segment. The quant tables
@@ -366,7 +498,61 @@ def prepare_slots_61_70(slot_inputs, orig_mmi):
     return prepare_slots_pool(slot_inputs, orig_mmi, preferred_start_slot = 38)
 
 
-def build_modified_mmi(custom_wallpapers, theme_hex = None, use_unisoc_icons = False):
+# LIST0 indices of the 9 main menu icons (normal display state), from the
+# theme engine's icon set. NOTE(recovery): selected/highlighted variants live at
+# other LIST0 indices; v1 replaces the normal icons.
+MENU_ICON_INDICES = [227, 229, 231, 233, 235, 237, 241, 243, 251]
+
+
+def apply_custom_icons(modified, orig, icon_images):
+    '''
+Writes custom icons into their LIST0 slots. icon_images maps a menu position
+(0..8) to a PIL image. Each icon is ABM-encoded to match the original slot's
+geometry and shrunk (fewer colors) if needed to fit the slot's capacity. Slots
+that do not fit even at minimum quality are left unchanged.
+'''
+    # (removed intra-app import: import spd_sjpg)
+    report = []
+    for pos, img in icon_images.items():
+        if img is None or pos < 0 or pos >= len(MENU_ICON_INDICES):
+            continue
+        idx = MENU_ICON_INDICES[pos]
+        rel = struct.unpack_from('<I', orig, LIST0_OFFSETS_OFF + idx * 4)[0]
+        sz = struct.unpack_from('<I', orig, LIST0_INFO_OFF + idx * 12 + 8)[0]
+        abs_off = LIST0_P0 + rel
+        # capacity = space up to the next icon in the file (keeps layout intact)
+        next_rel = struct.unpack_from('<I', orig, LIST0_OFFSETS_OFF + (idx + 1) * 4)[0]
+        cap = (LIST0_P0 + next_rel) - abs_off
+        if cap <= 0:
+            cap = sz
+        # match the original icon geometry so the device places it correctly
+        oh = orig[abs_off:abs_off + 16]
+        try:
+            W, H, _, _, topY, topX, bottomY, bottomX = struct.unpack('>HHHHBBBB', oh[4:16])
+        except Exception:
+            W, H, topY, topX, bottomY, bottomX = 68, 66, 9, 5, 5, 11
+        enc = None
+        for maxcol in (0, 200, 128, 96, 64, 48, 32):
+            im2 = img
+            if maxcol:
+                im2 = img.convert('RGB').quantize(colors=maxcol).convert('RGB')
+            cand = spd_sjpg.encode_abm_icon(im2, W=W, H=H, topY=topY, topX=topX, bottomY=bottomY, bottomX=bottomX)
+            if len(cand) <= cap:
+                enc = cand
+                break
+            enc = cand
+        if enc is None or len(enc) > cap:
+            report.append((idx, 'too big', len(enc) if enc else 0, cap))
+            continue
+        modified[abs_off:abs_off + len(enc)] = enc
+        if len(enc) < sz:
+            modified[abs_off + len(enc):abs_off + sz] = b'\x00' * (sz - len(enc))
+        struct.pack_into('<I', modified, LIST0_INFO_OFF + idx * 12 + 8, len(enc))
+        report.append((idx, 'ok', len(enc), cap))
+    return report
+
+
+def build_modified_mmi(custom_wallpapers, theme_hex = None, use_unisoc_icons = False, custom_icons = None):
     '''
 Builds patched MMI binary respecting exact user customization choices:
 - Guaranteed ZERO Gaussian blur (blur = 0.0) for all custom wallpapers.
@@ -482,6 +668,13 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
             modified[LIST0_INFO_OFF + qlyx_idx * 12:LIST0_INFO_OFF + (qlyx_idx + 1) * 12] = orig[LIST0_INFO_OFF + orig_idx * 12:LIST0_INFO_OFF + (orig_idx + 1) * 12]
             modified[LIST0_OFFSETS_OFF + qlyx_idx * 4:LIST0_OFFSETS_OFF + (qlyx_idx + 1) * 4] = orig[LIST0_OFFSETS_OFF + orig_idx * 4:LIST0_OFFSETS_OFF + (orig_idx + 1) * 4]
     
+    if custom_icons:
+        try:
+            rep = apply_custom_icons(modified, orig, custom_icons)
+            print('Custom icons:', rep)
+        except Exception as e:
+            print(f'''Warning: could not apply custom icons: {e}''')
+
     try:
         # (removed intra-app import: import text_engine)
         modified = text_engine.apply_text_patches(modified)
@@ -1530,6 +1723,88 @@ device across several wallpapers instead of the tiny fixed text fields.
         self.destroy()
 
 
+class IconReplaceDialog(tk.Toplevel):
+    '''
+Replace the 9 main menu icons with custom images. Shows each original icon
+(decoded from the MMI) so the user knows which is which, then lets them pick a
+replacement image per icon. Chosen images are stored on the parent and encoded
+to the device ABM format at deploy time.
+'''
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title('🎨 החלפת אייקונים')
+        self.geometry('560x520')
+        self.configure(bg = '#22252a')
+        self.transient(parent)
+        self.grab_set()
+        self._thumbs = {}
+        self._orig_imgs = self._load_originals()
+        self._build_ui()
+
+    def _load_originals(self):
+        import mmi_builder, spd_sjpg, struct
+        res = {}
+        try:
+            with open(mmi_builder.MMI_DUMP_PATH, 'rb') as f:
+                d = f.read()
+            for pos, idx in enumerate(mmi_builder.MENU_ICON_INDICES):
+                try:
+                    rel = struct.unpack_from('<I', d, mmi_builder.LIST0_OFFSETS_OFF + idx * 4)[0]
+                    sz = struct.unpack_from('<I', d, mmi_builder.LIST0_INFO_OFF + idx * 12 + 8)[0]
+                    ab = mmi_builder.LIST0_P0 + rel
+                    res[pos] = spd_sjpg.decode_abm(d[ab:ab + sz])
+                except Exception:
+                    res[pos] = None
+        except Exception:
+            pass
+        return res
+
+    def _build_ui(self):
+        tk.Label(self, text = 'החלפת אייקוני התפריט הראשי (9 אייקונים)', font = ('Segoe UI', 13, 'bold'), fg = '#06d6a0', bg = '#22252a').pack(pady = (12, 2))
+        tk.Label(self, text = 'לחץ על אייקון כדי לבחור תמונה שתחליף אותו. רקע לבן מומלץ.', font = ('Segoe UI', 9), fg = '#adb5bd', bg = '#22252a').pack(pady = (0, 8))
+        grid = tk.Frame(self, bg = '#22252a')
+        grid.pack(padx = 12, pady = 6)
+        for pos in range(9):
+            r, c = divmod(pos, 3)
+            cell = tk.Frame(grid, bg = '#1a1c23', padx = 6, pady = 6, highlightthickness = 1, highlightbackground = '#343a40')
+            cell.grid(row = r, column = c, padx = 6, pady = 6)
+            cv = tk.Canvas(cell, width = 56, height = 56, bg = '#ffffff', highlightthickness = 0, cursor = 'hand2')
+            cv.pack()
+            self._render_thumb(cv, pos)
+            cv.bind('<Button-1>', (lambda e, p = pos, canvas = cv: self._pick(p, canvas)))
+            tk.Button(cell, text = 'בחר', font = ('Segoe UI', 8), bg = '#2a475e', fg = '#fff', relief = 'flat', cursor = 'hand2', command = (lambda p = pos, canvas = cv: self._pick(p, canvas))).pack(pady = (4, 0))
+        btns = tk.Frame(self, bg = '#22252a')
+        btns.pack(fill = 'x', padx = 16, pady = 12)
+        tk.Button(btns, text = '✔ סגור', font = ('Segoe UI', 11, 'bold'), bg = '#06d6a0', fg = '#111215', relief = 'flat', padx = 16, pady = 6, cursor = 'hand2', command = self.destroy).pack(side = 'right', padx = 6)
+        tk.Label(self, text = 'לאחר בחירה, לחץ "החל והכן לצריבה" במסך הראשי.', font = ('Segoe UI', 9), fg = '#ffd166', bg = '#22252a').pack(pady = (0, 6))
+
+    def _render_thumb(self, canvas, pos):
+        img = self.parent.custom_icons.get(pos) or self._orig_imgs.get(pos)
+        if img is None:
+            return
+        disp = Image.new('RGBA', (56, 56), (255, 255, 255, 255))
+        disp.alpha_composite(img.convert('RGBA').resize((56, 56), Image.LANCZOS))
+        ph = ImageTk.PhotoImage(disp.convert('RGB'))
+        self._thumbs[pos] = ph
+        canvas.delete('all')
+        canvas.create_image(28, 28, image = ph)
+
+    def _pick(self, pos, canvas):
+        path = filedialog.askopenfilename(title = f'''בחר תמונה לאייקון #{pos + 1}''', filetypes = [('קבצי תמונה', '*.png;*.jpg;*.jpeg;*.webp;*.bmp'), ('כל הקבצים', '*.*')])
+        if not path:
+            return None
+        try:
+            im = Image.open(path).convert('RGBA')
+        except Exception as e:
+            messagebox.showerror('שגיאה', f'''לא ניתן לפתוח את התמונה:\n{e}''')
+            return None
+        self.parent.custom_icons[pos] = im
+        self._render_thumb(canvas, pos)
+        self.parent.lbl_status.config(text = f'''‏אייקון #{pos + 1} נבחר. לחץ \'החל והכן לצריבה\' לצריבה.''')
+
+
 class WallpaperSwapDialog(tk.Toplevel):
     '''
 Dialog for swapping / reordering wallpaper positions between two slots.
@@ -1757,6 +2032,7 @@ class Q8WallpaperStudio(tk.Tk):
 
         self.slot_state = { }
         self.thumb_images = { }
+        self.custom_icons = { }
         self.selected_slot = 1
         self.current_cols = 4
         self.is_deploying = False
@@ -1856,6 +2132,8 @@ class Q8WallpaperStudio(tk.Tk):
         btn_reset_all.pack(side = 'left', padx = 4)
         btn_text2wp = tk.Button(actions_frame, text = '‏📖 טקסט לטפט', font = ('Segoe UI', 9, 'bold'), bg = '#6f42c1', fg = '#ffffff', activebackground = '#5a32a3', activeforeground = '#ffffff', relief = 'flat', padx = 8, pady = 6, cursor = 'hand2', command = self.open_text_to_wallpaper_dialog)
         btn_text2wp.pack(side = 'left', padx = 4)
+        btn_icons = tk.Button(actions_frame, text = '‏🎨 החלף אייקונים', font = ('Segoe UI', 9, 'bold'), bg = '#e07b39', fg = '#ffffff', activebackground = '#c96522', activeforeground = '#ffffff', relief = 'flat', padx = 8, pady = 6, cursor = 'hand2', command = self.open_icon_dialog)
+        btn_icons.pack(side = 'left', padx = 4)
 
     
     def _build_tabs(self):
@@ -3167,6 +3445,10 @@ class Q8WallpaperStudio(tk.Tk):
         start = self.selected_slot if getattr(self, 'selected_slot', None) else 20
         TextToWallpaperDialog(self, start_slot = start)
 
+    def open_icon_dialog(self):
+        '''Opens the custom menu-icon replacement tool.'''
+        IconReplaceDialog(self)
+
     def _assign_custom_image(self, slot, img):
         '''Assigns a rendered PIL image to a slot as a custom wallpaper.'''
         if slot not in self.slot_state:
@@ -3345,7 +3627,8 @@ class Q8WallpaperStudio(tk.Tk):
                     custom_wallpapers[slot] = Image.open(png_p).convert('RGB')
                 self.post_ui((lambda : self.lbl_status.config(text = '‏בונה את קובץ המשאבים, הטקסטים וערכת הנושא...')))
                 use_icons = self.use_unisoc_icons.get() if hasattr(self, 'use_unisoc_icons') else False
-                orig, mod = mmi_builder.build_modified_mmi(custom_wallpapers, theme_hex = self.confirmed_theme_hex, use_unisoc_icons = use_icons)
+                cust_icons = {p: v for p, v in self.custom_icons.items() if v is not None}
+                orig, mod = mmi_builder.build_modified_mmi(custom_wallpapers, theme_hex = self.confirmed_theme_hex, use_unisoc_icons = use_icons, custom_icons = cust_icons or None)
                 # DEBUG(recovery): save the encoded SJPG of the first few custom slots
                 # so their exact bytes can be compared against real device slots.
                 try:

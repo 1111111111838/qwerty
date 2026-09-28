@@ -196,7 +196,61 @@ def prepare_slots_61_70(slot_inputs, orig_mmi):
     return prepare_slots_pool(slot_inputs, orig_mmi, preferred_start_slot = 38)
 
 
-def build_modified_mmi(custom_wallpapers, theme_hex = None, use_unisoc_icons = False):
+# LIST0 indices of the 9 main menu icons (normal display state), from the
+# theme engine's icon set. NOTE(recovery): selected/highlighted variants live at
+# other LIST0 indices; v1 replaces the normal icons.
+MENU_ICON_INDICES = [227, 229, 231, 233, 235, 237, 241, 243, 251]
+
+
+def apply_custom_icons(modified, orig, icon_images):
+    '''
+Writes custom icons into their LIST0 slots. icon_images maps a menu position
+(0..8) to a PIL image. Each icon is ABM-encoded to match the original slot's
+geometry and shrunk (fewer colors) if needed to fit the slot's capacity. Slots
+that do not fit even at minimum quality are left unchanged.
+'''
+    import spd_sjpg
+    report = []
+    for pos, img in icon_images.items():
+        if img is None or pos < 0 or pos >= len(MENU_ICON_INDICES):
+            continue
+        idx = MENU_ICON_INDICES[pos]
+        rel = struct.unpack_from('<I', orig, LIST0_OFFSETS_OFF + idx * 4)[0]
+        sz = struct.unpack_from('<I', orig, LIST0_INFO_OFF + idx * 12 + 8)[0]
+        abs_off = LIST0_P0 + rel
+        # capacity = space up to the next icon in the file (keeps layout intact)
+        next_rel = struct.unpack_from('<I', orig, LIST0_OFFSETS_OFF + (idx + 1) * 4)[0]
+        cap = (LIST0_P0 + next_rel) - abs_off
+        if cap <= 0:
+            cap = sz
+        # match the original icon geometry so the device places it correctly
+        oh = orig[abs_off:abs_off + 16]
+        try:
+            W, H, _, _, topY, topX, bottomY, bottomX = struct.unpack('>HHHHBBBB', oh[4:16])
+        except Exception:
+            W, H, topY, topX, bottomY, bottomX = 68, 66, 9, 5, 5, 11
+        enc = None
+        for maxcol in (0, 200, 128, 96, 64, 48, 32):
+            im2 = img
+            if maxcol:
+                im2 = img.convert('RGB').quantize(colors=maxcol).convert('RGB')
+            cand = spd_sjpg.encode_abm_icon(im2, W=W, H=H, topY=topY, topX=topX, bottomY=bottomY, bottomX=bottomX)
+            if len(cand) <= cap:
+                enc = cand
+                break
+            enc = cand
+        if enc is None or len(enc) > cap:
+            report.append((idx, 'too big', len(enc) if enc else 0, cap))
+            continue
+        modified[abs_off:abs_off + len(enc)] = enc
+        if len(enc) < sz:
+            modified[abs_off + len(enc):abs_off + sz] = b'\x00' * (sz - len(enc))
+        struct.pack_into('<I', modified, LIST0_INFO_OFF + idx * 12 + 8, len(enc))
+        report.append((idx, 'ok', len(enc), cap))
+    return report
+
+
+def build_modified_mmi(custom_wallpapers, theme_hex = None, use_unisoc_icons = False, custom_icons = None):
     '''
 Builds patched MMI binary respecting exact user customization choices:
 - Guaranteed ZERO Gaussian blur (blur = 0.0) for all custom wallpapers.
@@ -312,6 +366,13 @@ Guaranteed zero bootloop and zero overflow beyond List 40 limit (0x26301E4).
             modified[LIST0_INFO_OFF + qlyx_idx * 12:LIST0_INFO_OFF + (qlyx_idx + 1) * 12] = orig[LIST0_INFO_OFF + orig_idx * 12:LIST0_INFO_OFF + (orig_idx + 1) * 12]
             modified[LIST0_OFFSETS_OFF + qlyx_idx * 4:LIST0_OFFSETS_OFF + (qlyx_idx + 1) * 4] = orig[LIST0_OFFSETS_OFF + orig_idx * 4:LIST0_OFFSETS_OFF + (orig_idx + 1) * 4]
     
+    if custom_icons:
+        try:
+            rep = apply_custom_icons(modified, orig, custom_icons)
+            print('Custom icons:', rep)
+        except Exception as e:
+            print(f'''Warning: could not apply custom icons: {e}''')
+
     try:
         import text_engine
         modified = text_engine.apply_text_patches(modified)
