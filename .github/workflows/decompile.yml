@@ -20,33 +20,33 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Advanced Desktop Environment (KDE Plasma) & Tools
+      - name: Install Advanced Desktop Environment & Tools
         run: |
           sudo apt update
           
-          # התקנת שולחן עבודה KDE, גופנים וכלי מערכת
-          sudo DEBIAN_FRONTEND=noninteractive apt install --assume-yes \
+          # התקנה שקטה לחלוטין ללא בקשת קלט מהמשתמש
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
             kde-plasma-desktop dbus-x11 xserver-xorg-video-dummy \
-            dolphin konsole kate kcalc ark fonts-dejavu-core fonts-noto-core
+            dolphin konsole kate fonts-dejavu-core fonts-noto-core
 
-          # התקנת Google Chrome
-          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt install -f -y
+          # התקנת Google Chrome Remote Desktop בצורה בטוחה
+          wget -q https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
+          sudo apt install -y ./chrome-remote-desktop_current_amd64.deb || sudo apt --fix-broken install -y
+          rm -f chrome-remote-desktop_current_amd64.deb
 
-          # התקנת Chrome Remote Desktop
-          wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
-          sudo dpkg -i chrome-remote-desktop_current_amd64.deb || sudo apt install -f -y
+          # התקנת דפדפן Google Chrome
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt install -y ./google-chrome-stable_current_amd64.deb || sudo apt --fix-broken install -y
+          rm -f google-chrome-stable_current_amd64.deb
 
-          # הגדרת סשן הפעלה של KDE עבור CRD
+          # הגדרת סשן הפעלה עבור CRD
           echo "export DESKTOP_SESSION=plasma" > ~/.chrome-remote-desktop-session
           echo "exec startplasma-x11" >> ~/.chrome-remote-desktop-session
 
       - name: Configure User Password, Screen Locker & Hebrew Keyboard
         run: |
-          # הגדרת סיסמה למשתמש runner
           echo "runner:123456" | sudo chpasswd
 
-          # ביטול נעילת מסך אוטומטית
           mkdir -p ~/.config
           cat << 'EOF' > ~/.config/kscreenlockerrc
           [Daemon]
@@ -55,18 +55,14 @@ jobs:
           Timeout=0
           EOF
 
-          # הגדרת מקלדת עברית + אנגלית עם החלפה ב-Alt+Shift
-          sudo localectl set-x11-keymap us,il pc105 "" grp:alt_shift_toggle
+          sudo localectl set-x11-keymap us,il pc105 "" grp:alt_shift_toggle || true
 
       - name: Restore Chrome Profile from Repository
         run: |
           if [ -f "$GITHUB_WORKSPACE/chrome_profile.tar.gz" ]; then
-            echo "פרופיל כרום נמצא במאגר, משחזר נתונים..."
+            echo "Restoring Chrome profile..."
             mkdir -p ~/.config/google-chrome
-            tar -xzf "$GITHUB_WORKSPACE/chrome_profile.tar.gz" -C ~/.config/google-chrome
-            echo "השחזור הושלם בהצלחה."
-          else
-            echo "לא נמצא גיבוי קודם של כרום, ייווצר פרופיל נקי."
+            tar -xzf "$GITHUB_WORKSPACE/chrome_profile.tar.gz" -C ~/.config/google-chrome || true
           fi
 
       - name: Register and Start Chrome Remote Desktop
@@ -80,9 +76,8 @@ jobs:
 
       - name: Keep Alive for 6 Hours
         run: |
-          echo "KDE Plasma Desktop running. Active for 6 hours..."
+          echo "Session running. Active for 6 hours..."
           sleep 21600
-          echo "Session finished."
 
       - name: Save Chrome Profile to Repository
         if: always()
@@ -91,18 +86,16 @@ jobs:
           sleep 3
 
           if [ -d "$HOME/.config/google-chrome" ]; then
-            echo "מכווץ את תיקיית הפרופיל של כרום..."
             tar --exclude='Default/Cache' \
                 --exclude='Default/Code Cache' \
                 --exclude='Default/GPUCache' \
                 --exclude='GrShaderCache' \
                 --exclude='ShaderCache' \
-                -czf "$GITHUB_WORKSPACE/chrome_profile.tar.gz" -C "$HOME/.config/google-chrome" .
+                -czf "$GITHUB_WORKSPACE/chrome_profile.tar.gz" -C "$HOME/.config/google-chrome" . || true
 
             cd "$GITHUB_WORKSPACE"
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
             git add chrome_profile.tar.gz
             git diff --staged --quiet || (git commit -m "Auto-save Chrome profile [skip ci]" && git push)
-            echo "נתוני כרום נשמרו בהצלחה למאגר."
           fi
