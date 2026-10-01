@@ -21,7 +21,7 @@ jobs:
         run: |
           sudo apt update
           
-          # התקנת שולחן עבודה KDE וכלי עזר בסיסיים
+          # התקנת שולחן עבודה KDE וכלי מערכת
           sudo DEBIAN_FRONTEND=noninteractive apt install --assume-yes \
             kde-plasma-desktop dbus-x11 xserver-xorg-video-dummy \
             dolphin konsole kate kcalc ark
@@ -38,13 +38,35 @@ jobs:
           echo "export DESKTOP_SESSION=plasma" > ~/.chrome-remote-desktop-session
           echo "exec startplasma-x11" >> ~/.chrome-remote-desktop-session
 
+      - name: Configure User Password & Disable Screen Locker
+        run: |
+          # הגדרת סיסמה למשתמש runner
+          echo "runner:123456" | sudo chpasswd
+
+          # ביטול נעילת מסך אוטומטית ב-KDE
+          mkdir -p ~/.config
+          cat << 'EOF' > ~/.config/kscreenlockerrc
+          [Daemon]
+          Autolock=false
+          LockOnResume=false
+          Timeout=0
+          EOF
+
       - name: Register and Start Chrome Remote Desktop
         run: |
-          ${{ github.event.inputs.crd_auth_code }} --pin=${{ github.event.inputs.crd_pin }}
+          # קביעת שעת הקמה לפי אזור זמן ירושלים (שעה ודקות)
+          RUN_TIME=$(TZ="Asia/Jerusalem" date +"%H-%M")
+          
+          # הגדרת השם שיופיע ברשימת המחשבים של גוגל
+          CUSTOM_NAME="GitHub-Server-$RUN_TIME"
+          sudo hostnamectl set-hostname "$CUSTOM_NAME"
+
+          # החלפת השם בפקודת ההרשאה והרצתה עם ה-PIN שהוזן
+          CMD=$(echo "${{ github.event.inputs.crd_auth_code }}" | sed -E "s/--name=[^ ]+/--name=$CUSTOM_NAME/")
+          eval "$CMD --pin=${{ github.event.inputs.crd_pin }}"
 
       - name: Keep Alive for 6 Hours
         run: |
           echo "KDE Plasma Desktop running. Active for 6 hours..."
-          # 21600 שניות = 6 שעות
           sleep 21600
           echo "Session finished."
