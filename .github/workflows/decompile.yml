@@ -1,152 +1,42 @@
-name: פירוק סטודיו Q8
+name: Remote Desktop Session
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'א/סטודיו Q8.exe'
-      - '.github/workflows/decompile.yml'
-
-permissions:
-  contents: write
+    inputs:
+      crd_auth_code:
+        description: 'Command line string from Google Headless (starts with DISPLAY=...)'
+        required: true
+      crd_pin:
+        description: '6-digit PIN for CRD'
+        required: true
+        default: '123456'
 
 jobs:
-  unpack:
-    runs-on: ubuntu-latest
+  start-desktop:
+    runs-on: ubuntu-24.04
+
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install extraction tools
+      - name: Install Desktop Environment & Chrome Remote Desktop
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install pyinstxtractor-ng
+          sudo apt update
+          sudo DEBIAN_FRONTEND=noninteractive apt install --assume-yes \
+            xfce4 xfce4-goodies dbus-x11 xserver-xorg-video-dummy \
+            firefox thunar mousepad
 
-      - name: Extract PyInstaller executable
+          # Download and install Google Chrome Remote Desktop
+          wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
+          sudo dpkg --install chrome-remote-desktop_current_amd64.deb || sudo apt install -f -y
+
+          # Configure XFCE session for the runner user
+          echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > ~/.chrome-remote-desktop-session
+
+      - name: Register and Start Chrome Remote Desktop
         run: |
-          rm -rf "א/פירוק"
-          mkdir -p "א/פירוק"
-          pyinstxtractor-ng --one-dir "א/סטודיו Q8.exe"
-          EXTRACTED="$(find . -maxdepth 3 -type d -name '*_extracted' -print -quit)"
-          if [ -n "$EXTRACTED" ] && [ -d "$EXTRACTED" ]; then
-            cp -a "$EXTRACTED"/. "א/פירוק"/
-            rm -rf "$EXTRACTED"
-          else
-            echo "Extractor did not create an extracted directory."
-            exit 1
-          fi
+          # Inject the PIN automatically into the auth command
+          ${{ github.event.inputs.crd_auth_code }} --pin=${{ github.event.inputs.crd_pin }}
 
-      - name: Build Python 3.14 capable pycdc
+      - name: Keep Alive for 20 Minutes
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake git
-          git clone --depth 1 https://github.com/Youchuang-Studio/pycdc-rapid.git pycdc-rapid
-          cmake -S pycdc-rapid -B pycdc-rapid/build
-          cmake --build pycdc-rapid/build --config Release -j2
-          find pycdc-rapid/build -type f \( -name pycdc -o -name pycdas \) -print
-
-      - name: Decompile Python bytecode
-        shell: bash
-        run: |
-          set +e
-          mkdir -p "א/פירוק/קוד"
-          PYCDEC="$(find pycdc-rapid/build -type f -name pycdc -print -quit)"
-          PYCdas="$(find pycdc-rapid/build -type f -name pycdas -print -quit)"
-          if [ -z "$PYCDEC" ]; then
-            echo "pycdc was not built."
-            exit 1
-          fi
-
-          TOTAL=0
-          SUCCESS=0
-          while IFS= read -r -d '' PYC; do
-            TOTAL=$((TOTAL + 1))
-            REL="${PYC#א/פירוק/}"
-            OUT="א/פירוק/קוד/${REL%.pyc}.py"
-            mkdir -p "$(dirname "$OUT")"
-            echo "=== Decompiling: $REL ==="
-            "$PYCDEC" "$PYC" > "$OUT" 2> /tmp/pycdc.log
-            RC=$?
-            if [ $RC -eq 0 ] && [ -s "$OUT" ]; then
-              SUCCESS=$((SUCCESS + 1))
-              echo "OK: $OUT"
-            else
-              echo "FAILED: $REL"
-              cat /tmp/pycdc.log || true
-              if [ -n "$PYCdas" ]; then
-                "$PYCdas" "$PYC" > "${OUT%.py}.dis.txt" 2>&1 || true
-              fi
-              echo "# pycdc could not fully decompile: $REL" > "$OUT"
-              echo "# A .dis.txt file is included when pycdas could disassemble it." >> "$OUT"
-            fi
-          done < <(find "א/פירוק" -type f -name '*.pyc' -print0)
-
-          echo "=== Decompilation summary ==="
-          echo "PYC files: $TOTAL"
-          echo "Successful: $SUCCESS"
-          echo "Failed: $((TOTAL - SUCCESS))"
-
-      - name: Main app fallback disassembly
-        if: always()
-        run: |
-          if [ -f "א/פירוק/app.pyc" ]; then
-            PYCdas="$(find pycdc-rapid/build -type f -name pycdas -print -quit)"
-            if [ -n "$PYCdas" ]; then
-              "$PYCdas" "א/פירוק/app.pyc" > "א/פירוק/קוד/app.dis.txt" 2>&1 || true
-            fi
-          fi
-
-      - name: Create one combined Python file
-        shell: bash
-        run: |
-          OUT="א/סטודיו_Q8_קוד_מלא.py"
-          rm -f "$OUT"
-          {
-            echo "# ============================================================"
-            echo "# Studio Q8 - Combined recovered Python source"
-            echo "# Source: א/סטודיו Q8.exe"
-            echo "# ============================================================"
-            echo
-          } > "$OUT"
-
-          find "א/פירוק/קוד" -type f -name '*.py' ! -name 'app.py' -print0 | sort -z |
-          while IFS= read -r -d '' FILE; do
-            REL="${FILE#א/פירוק/קוד/}"
-            {
-              echo
-              echo "# ============================================================"
-              echo "# MODULE: $REL"
-              echo "# ============================================================"
-              cat "$FILE"
-              echo
-            } >> "$OUT"
-          done
-
-          if [ -f "א/פירוק/קוד/app.py" ]; then
-            {
-              echo
-              echo "# ============================================================"
-              echo "# MAIN MODULE: app.py"
-              echo "# ============================================================"
-              cat "א/פירוק/קוד/app.py"
-              echo
-            } >> "$OUT"
-          fi
-
-          echo "=== Combined file ==="
-          wc -l "$OUT"
-          wc -c "$OUT"
-          echo "Created: $OUT"
-
-      - name: Show result
-        run: |
-          echo "=== Combined source preview ==="
-          sed -n '1,240p' "א/סטודיו_Q8_קוד_מלא.py"
-          echo "=== Files ==="
-          find "א/פירוק/קוד" -type f \( -name '*.py' -o -name '*.dis.txt' \) | sort | head -500
-
-      - name: Save extraction and combined code
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "א/פירוק" "א/סטודיו_Q8_קוד_מלא.py"
-          git diff --cached --quiet || (git commit -m "Combine recovered Studio Q8 code into one file" && git push)
+          echo "Session started successfully. Staying active for 20 minutes..."
+          sleep 1200
+          echo "Session time completed."
