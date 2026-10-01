@@ -1,10 +1,10 @@
-name: Remote Desktop Session
+name: Advanced Remote Desktop Session (KDE - 6 Hours)
 
 on:
   workflow_dispatch:
     inputs:
       crd_auth_code:
-        description: 'Command line string from Google Headless (starts with DISPLAY=...)'
+        description: 'Google Headless CRD Auth Command'
         required: true
       crd_pin:
         description: '6-digit PIN for CRD'
@@ -14,29 +14,37 @@ on:
 jobs:
   start-desktop:
     runs-on: ubuntu-24.04
+    timeout-minutes: 360
 
     steps:
-      - name: Install Desktop Environment & Chrome Remote Desktop
+      - name: Install Advanced Desktop Environment (KDE Plasma) & Tools
         run: |
           sudo apt update
+          
+          # התקנת שולחן עבודה KDE וכלי עזר בסיסיים
           sudo DEBIAN_FRONTEND=noninteractive apt install --assume-yes \
-            xfce4 xfce4-goodies dbus-x11 xserver-xorg-video-dummy \
-            firefox thunar mousepad
+            kde-plasma-desktop dbus-x11 xserver-xorg-video-dummy \
+            dolphin konsole kate kcalc ark
 
-          # Download and install Google Chrome Remote Desktop
+          # התקנת Google Chrome
+          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt install -f -y
+
+          # התקנת Chrome Remote Desktop
           wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
-          sudo dpkg --install chrome-remote-desktop_current_amd64.deb || sudo apt install -f -y
+          sudo dpkg -i chrome-remote-desktop_current_amd64.deb || sudo apt install -f -y
 
-          # Configure XFCE session for the runner user
-          echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > ~/.chrome-remote-desktop-session
+          # הגדרת סשן הפעלה של KDE עבור CRD
+          echo "export DESKTOP_SESSION=plasma" > ~/.chrome-remote-desktop-session
+          echo "exec startplasma-x11" >> ~/.chrome-remote-desktop-session
 
       - name: Register and Start Chrome Remote Desktop
         run: |
-          # Inject the PIN automatically into the auth command
           ${{ github.event.inputs.crd_auth_code }} --pin=${{ github.event.inputs.crd_pin }}
 
-      - name: Keep Alive for 20 Minutes
+      - name: Keep Alive for 6 Hours
         run: |
-          echo "Session started successfully. Staying active for 20 minutes..."
-          sleep 1200
-          echo "Session time completed."
+          echo "KDE Plasma Desktop running. Active for 6 hours..."
+          # 21600 שניות = 6 שעות
+          sleep 21600
+          echo "Session finished."
