@@ -1,63 +1,101 @@
-name: Remote Desktop with Filtering
+name: Advanced Remote Desktop Session (KDE - 6 Hours)
 
 on:
   workflow_dispatch:
     inputs:
-      crd_code:
-        description: 'הדבק כאן את קוד ה-CRD מ-remotedesktop.google.com/headless'
+      crd_auth_code:
+        description: 'Google Headless CRD Auth Command'
         required: true
-      pin:
-        description: 'קוד PIN בן 6 ספרות'
+      crd_pin:
+        description: '6-digit PIN for CRD'
         required: true
         default: '123456'
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  start-desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
     steps:
-      - name: הגדרת סינון רשת ונעילת DNS
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Advanced Desktop Environment & Tools
         run: |
-          # 1. ניתוב ל-DNS מסנן (Cloudflare Family)
-          sudo systemctl stop systemd-resolved || true
-          sudo systemctl disable systemd-resolved || true
-          sudo rm -f /etc/resolv.conf
-          echo "nameserver 1.1.1.3" | sudo tee /etc/resolv.conf
-          echo "nameserver 1.0.0.3" | sudo tee -a /etc/resolv.conf
+          sudo apt update
+          
+          # התקנה שקטה לחלוטין ללא בקשת קלט מהמשתמש
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
+            kde-plasma-desktop dbus-x11 xserver-xorg-video-dummy \
+            dolphin konsole kate fonts-dejavu-core fonts-noto-core
 
-          # 2. מניעת עריכה של קובץ ההגדרות (נעילת קובץ)
-          sudo chattr +i /etc/resolv.conf
-
-          # 3. חסימת כל בקשות DNS לשרתים אחרים (פורט 53 ו-853)
-          sudo iptables -A OUTPUT -p udp --dport 53 -d 1.1.1.3 -j ACCEPT
-          sudo iptables -A OUTPUT -p tcp --dport 53 -d 1.1.1.3 -j ACCEPT
-          sudo iptables -A OUTPUT -p udp --dport 53 -d 1.0.0.3 -j ACCEPT
-          sudo iptables -A OUTPUT -p tcp --dport 53 -d 1.0.0.3 -j ACCEPT
-          sudo iptables -A OUTPUT -p udp --dport 53 -j DROP
-          sudo iptables -A OUTPUT -p tcp --dport 53 -j DROP
-          sudo iptables -A OUTPUT -p tcp --dport 853 -j DROP
-
-      - name: התקנת סביבת שולחן עבודה ו-Chrome Remote Desktop
-        run: |
-          sudo apt-get update --fix-missing
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies dbus-x11 xvfb
+          # התקנת Google Chrome Remote Desktop בצורה בטוחה
           wget -q https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ./chrome-remote-desktop_current_amd64.deb
+          sudo apt install -y ./chrome-remote-desktop_current_amd64.deb || sudo apt --fix-broken install -y
           rm -f chrome-remote-desktop_current_amd64.deb
 
-      - name: הגדרת סשן שולחן עבודה
-        run: |
-          mkdir -p ~/.config/chrome-remote-desktop
-          echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > ~/.chrome-remote-desktop-session
+          # התקנת דפדפן Google Chrome
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt install -y ./google-chrome-stable_current_amd64.deb || sudo apt --fix-broken install -y
+          rm -f google-chrome-stable_current_amd64.deb
 
-      - name: הפעלת שרת הגישה המרוחקת
+          # הגדרת סשן הפעלה עבור CRD
+          echo "export DESKTOP_SESSION=plasma" > ~/.chrome-remote-desktop-session
+          echo "exec startplasma-x11" >> ~/.chrome-remote-desktop-session
+
+      - name: Configure User Password, Screen Locker & Hebrew Keyboard
         run: |
-          /opt/google/chrome-remote-desktop/start-host \
-            --code="${{ github.event.inputs.crd_code }}" \
-            --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
-            --name="GitHub-Runner" \
-            --user-name="$USER" \
-            --host-type=single-process \
-            --pin="${{ github.event.inputs.pin }}"
-          
-          # שמירה על הריצה פעילה
+          echo "runner:123456" | sudo chpasswd
+
+          mkdir -p ~/.config
+          cat << 'EOF' > ~/.config/kscreenlockerrc
+          [Daemon]
+          Autolock=false
+          LockOnResume=false
+          Timeout=0
+          EOF
+
+          sudo localectl set-x11-keymap us,il pc105 "" grp:alt_shift_toggle || true
+
+      - name: Restore Chrome Profile from Repository
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/chrome_profile.tar.gz" ]; then
+            echo "Restoring Chrome profile..."
+            mkdir -p ~/.config/google-chrome
+            tar -xzf "$GITHUB_WORKSPACE/chrome_profile.tar.gz" -C ~/.config/google-chrome || true
+          fi
+
+      - name: Register and Start Chrome Remote Desktop
+        run: |
+          RUN_TIME=$(TZ="Asia/Jerusalem" date +"%H-%M")
+          CUSTOM_NAME="GitHub-Server-$RUN_TIME"
+          sudo hostnamectl set-hostname "$CUSTOM_NAME"
+
+          CMD=$(echo "${{ github.event.inputs.crd_auth_code }}" | sed -E "s/--name=[^ ]+/--name=$CUSTOM_NAME/")
+          eval "$CMD --pin=${{ github.event.inputs.crd_pin }}"
+
+      - name: Keep Alive for 6 Hours
+        run: |
+          echo "Session running. Active for 6 hours..."
           sleep 21600
+
+      - name: Save Chrome Profile to Repository
+        if: always()
+        run: |
+          pkill -f chrome || true
+          sleep 3
+
+          if [ -d "$HOME/.config/google-chrome" ]; then
+            tar --exclude='Default/Cache' \
+                --exclude='Default/Code Cache' \
+                --exclude='Default/GPUCache' \
+                --exclude='GrShaderCache' \
+                --exclude='ShaderCache' \
+                -czf "$GITHUB_WORKSPACE/chrome_profile.tar.gz" -C "$HOME/.config/google-chrome" . || true
+
+            cd "$GITHUB_WORKSPACE"
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git add chrome_profile.tar.gz
+            git diff --staged --quiet || (git commit -m "Auto-save Chrome profile [skip ci]" && git push)
+          fi
