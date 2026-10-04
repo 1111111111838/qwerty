@@ -20,16 +20,22 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Advanced Desktop Environment & Tools
+      - name: Install Advanced Desktop Environment & Hebrew Support
         run: |
           sudo apt update
           
-          # התקנה שקטה לחלוטין ללא בקשת קלט מהמשתמש
+          # התקנת חבילות שולחן עבודה, מנהל חלונות, גופנים ותמיכה בשפה העברית
           sudo DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
-            kde-plasma-desktop dbus-x11 xserver-xorg-video-dummy \
-            dolphin konsole kate fonts-dejavu-core fonts-noto-core
+            kde-plasma-desktop kwin-x11 dbus-x11 xserver-xorg-video-dummy \
+            libgl1-mesa-dri mesa-utils x11-xkb-utils locales \
+            fonts-culmus fonts-dejavu-core fonts-noto-core \
+            dolphin konsole kate
 
-          # התקנת Google Chrome Remote Desktop בצורה בטוחה
+          # יצירת locale עברי במערכת
+          sudo locale-gen he_IL.UTF-8
+          sudo update-locale LANG=en_US.UTF-8
+
+          # התקנת Google Chrome Remote Desktop
           wget -q https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
           sudo apt install -y ./chrome-remote-desktop_current_amd64.deb || sudo apt --fix-broken install -y
           rm -f chrome-remote-desktop_current_amd64.deb
@@ -39,15 +45,21 @@ jobs:
           sudo apt install -y ./google-chrome-stable_current_amd64.deb || sudo apt --fix-broken install -y
           rm -f google-chrome-stable_current_amd64.deb
 
-          # הגדרת סשן הפעלה עבור CRD
-          echo "export DESKTOP_SESSION=plasma" > ~/.chrome-remote-desktop-session
-          echo "exec startplasma-x11" >> ~/.chrome-remote-desktop-session
+          # הגדרת סשן הפעלה: טעינת עברית ל-X11 והרצת Plasma
+          cat << 'EOF' > ~/.chrome-remote-desktop-session
+          export DESKTOP_SESSION=plasma
+          export XDG_CURRENT_DESKTOP=KDE
+          setxkbmap -model pc105 -layout us,il -option grp:alt_shift_toggle &
+          exec startplasma-x11
+          EOF
 
-      - name: Configure User Password, Screen Locker & Hebrew Keyboard
+      - name: Configure User Password, Window Buttons & Hebrew Keyboard
         run: |
           echo "runner:123456" | sudo chpasswd
 
           mkdir -p ~/.config
+          
+          # ביטול נעילת מסך
           cat << 'EOF' > ~/.config/kscreenlockerrc
           [Daemon]
           Autolock=false
@@ -55,7 +67,24 @@ jobs:
           Timeout=0
           EOF
 
-          sudo localectl set-x11-keymap us,il pc105 "" grp:alt_shift_toggle || true
+          # הגדרת כפתורי בקרה על החלונות: איקס, ריבוע, מינוס (IAX)
+          cat << 'EOF' > ~/.config/kwinrc
+          [org.kde.kdecoration2]
+          ButtonsOnRight=IAX
+          ButtonsOnLeft=M
+          EOF
+
+          # הגדרת פריסת מקלדת עברית ומעבר שפה ב-KDE Plasma
+          cat << 'EOF' > ~/.config/kxkbrc
+          [Layout]
+          DisplayNames=,
+          EnableSwitching=true
+          LayoutList=us,il
+          Options=grp:alt_shift_toggle
+          ResetOldOptions=true
+          SwitchMode=Global
+          Use=true
+          EOF
 
       - name: Restore Chrome Profile from Repository
         run: |
@@ -71,8 +100,19 @@ jobs:
           CUSTOM_NAME="GitHub-Server-$RUN_TIME"
           sudo hostnamectl set-hostname "$CUSTOM_NAME"
 
-          CMD=$(echo "${{ github.event.inputs.crd_auth_code }}" | sed -E "s/--name=[^ ]+/--name=$CUSTOM_NAME/")
-          eval "$CMD --pin=${{ github.event.inputs.crd_pin }}"
+          RAW_CMD="${{ github.event.inputs.crd_auth_code }}"
+
+          # זיהוי אוטומטי אם הוזנה פקודה מלאה או רק מחרוזת קוד
+          if [[ "$RAW_CMD" =~ --code= ]] || [[ "$RAW_CMD" =~ start-host ]]; then
+            CMD=$(echo "$RAW_CMD" | sed -E "s/--name=[^ ]+/--name=$CUSTOM_NAME/")
+            eval "$CMD --pin=${{ github.event.inputs.crd_pin }}"
+          else
+            /opt/google/chrome-remote-desktop/start-host \
+              --code="$RAW_CMD" \
+              --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
+              --name="$CUSTOM_NAME" \
+              --pin="${{ github.event.inputs.crd_pin }}"
+          fi
 
       - name: Keep Alive for 6 Hours
         run: |
