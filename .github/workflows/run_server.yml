@@ -1,0 +1,37 @@
+name: Run Temporary Server
+
+on:
+  workflow_dispatch: # מאפשר הפעלה ידנית בלחיצת כפתור
+
+jobs:
+  run-service:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run ngrok tunnel and Flask
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          # התקנת ngrok
+          curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+          sudo apt update && sudo apt install ngrok
+          
+          # הגדרת הטוקן והרצת המנהרה על הפורט שבו מאזין yemot_ai.py
+          ngrok config add-authtoken $NGROK_AUTHTOKEN
+          ngrok http 5000 --log=stdout &
+          
+          # הרצת שרת הפייתון
+          python yemot_ai.py
