@@ -778,6 +778,102 @@ menu icon. Returns (out_path, count).
     return (out_path, len(items))
 
 
+def scan_menu_structures(out_path):
+    '''
+Locate the main-menu definition table in the MMI dump. The menu order is set by a
+table pairing each slot with (icon id, text id, action id); to reorder/add/remove
+we must edit that table, not the icons. Anchor on the nine menu icon ids and
+report every region where they appear together as an array (several integer
+encodings) with a hex window around each candidate. Writes a report; returns
+(out_path, best_offset_or_None).
+'''
+    with open(MMI_DUMP_PATH, 'rb') as f:
+        data = f.read()
+    vals = MENU_ICON_INDICES
+    L = []
+    L.append('Menu-structure scan')
+    L.append('dump size: %d (0x%X)' % (len(data), len(data)))
+    L.append('menu icon ids: %s' % vals)
+    L.append('')
+
+    def _hexwin(off, before=48, after=160):
+        s = max(0, off - before)
+        e = min(len(data), off + after)
+        out = []
+        for p in range(s, e, 16):
+            row = data[p:p + 16]
+            hexs = ' '.join('%02X' % b for b in row)
+            out.append('  %08X: %-47s' % (p, hexs))
+        return '\n'.join(out)
+
+    best = None
+    for fmt, name, step in (('<H', 'u16le', 2), ('>H', 'u16be', 2), ('<I', 'u32le', 4), ('>I', 'u32be', 4)):
+        pat = b''.join(struct.pack(fmt, v) for v in vals)
+        hits = []
+        start = 0
+        while True:
+            j = data.find(pat, start)
+            if j < 0:
+                break
+            hits.append(j)
+            start = j + 1
+        if hits:
+            L.append('[%s] EXACT contiguous array of all 9 ids -> %d hit(s): %s' % (name, len(hits), ['0x%X' % h for h in hits]))
+            for h in hits[:4]:
+                L.append(_hexwin(h))
+                L.append('')
+            if best is None:
+                best = hits[0]
+        offs = []
+        for v in vals:
+            vp = struct.pack(fmt, v)
+            s2 = 0
+            while True:
+                j = data.find(vp, s2)
+                if j < 0:
+                    break
+                if (j % step) == 0 or step == 2:
+                    offs.append((j, v))
+                s2 = j + 1
+        offs.sort()
+        win = 80
+        i = 0
+        clusters = []
+        n = len(offs)
+        while i < n:
+            k = i
+            seen = {}
+            while k < n and offs[k][0] - offs[i][0] <= win:
+                seen[offs[k][1]] = offs[k][0]
+                k += 1
+            if len(seen) >= 7:
+                clusters.append((offs[i][0], len(seen), sorted(seen)))
+            i += 1
+        uniq = []
+        last = -9999
+        for c in clusters:
+            if c[0] - last > win:
+                uniq.append(c)
+                last = c[0]
+        if uniq:
+            L.append('[%s] windows containing >=7 of the 9 ids (candidate table):' % name)
+            for off, cnt, got in uniq[:6]:
+                L.append('  near 0x%X: %d/9 ids present %s' % (off, cnt, got))
+                L.append(_hexwin(off))
+                L.append('')
+            if best is None:
+                best = uniq[0][0]
+        L.append('')
+    L.append('best candidate offset: %s' % ('0x%X' % best if best is not None else 'NONE FOUND'))
+    L.append('')
+    L.append('If NONE FOUND, the menu order is likely compiled into the signed')
+    L.append('executable (secure boot) and cannot be edited. If a candidate table')
+    L.append('is found in this resource, reordering/add/remove is doable via the')
+    L.append('same safe path used for icons and text (no direct flashing).')
+    open(out_path, 'w', encoding='utf-8').write('\n'.join(L))
+    return (out_path, best)
+
+
 def build_modified_mmi(custom_wallpapers, theme_hex = None, use_unisoc_icons = False, custom_icons = None):
     '''
 Builds patched MMI binary respecting exact user customization choices:
@@ -2005,6 +2101,7 @@ to the device ABM format at deploy time.
         btns.pack(fill = 'x', padx = 16, pady = 12)
         tk.Button(btns, text = '✔ סגור', font = ('Segoe UI', 11, 'bold'), bg = '#06d6a0', fg = '#111215', relief = 'flat', padx = 16, pady = 6, cursor = 'hand2', command = self.destroy).pack(side = 'right', padx = 6)
         tk.Button(btns, text = '🔎 ייצא מפת אייקונים', font = ('Segoe UI', 10), bg = '#e07b39', fg = '#fff', relief = 'flat', padx = 12, pady = 6, cursor = 'hand2', command = self._export_atlas).pack(side = 'left', padx = 6)
+        tk.Button(btns, text = '🧭 סרוק מבנה תפריט', font = ('Segoe UI', 10), bg = '#2a9d8f', fg = '#fff', relief = 'flat', padx = 12, pady = 6, cursor = 'hand2', command = self._scan_menu).pack(side = 'left', padx = 6)
         tk.Label(self, text = 'לאחר בחירה, לחץ "החל והכן לצריבה" במסך הראשי.', font = ('Segoe UI', 9), fg = '#ffd166', bg = '#22252a').pack(pady = (0, 6))
 
     def _export_atlas(self):
@@ -2017,6 +2114,18 @@ to the device ABM format at deploy time.
             messagebox.showinfo('מפת אייקונים', f'‏נשמרה מפה של {n} אייקונים:\n{path}\n\nשלח/י את הקובץ הזה כדי שנזהה את אייקוני הבחירה (הווריאנט עם הצל וה-✓).')
         except Exception as e:
             messagebox.showerror('שגיאה', f'‏ייצוא נכשל:\n{e}')
+
+    def _scan_menu(self):
+        import os
+        try:
+            downloads = os.path.join(os.path.expanduser('~'), 'Downloads')
+            base = downloads if os.path.isdir(downloads) else os.path.expanduser('~')
+            out = os.path.join(base, 'q8_menu_scan.txt')
+            path, best = mmi_builder.scan_menu_structures(out)
+            found = ('נמצאה טבלת-תפריט מועמדת (אפשר אולי לערוך).' if best is not None else 'לא נמצאה טבלה במשאב — כנראה שהסדר בקוד החתום ולא ניתן לשינוי.')
+            messagebox.showinfo('סריקת מבנה תפריט', f'‏הדוח נשמר:\n{path}\n\n{found}\n\nשלח/י לי את הקובץ ואבדוק אם סידור התפריט ניתן לעריכה.')
+        except Exception as e:
+            messagebox.showerror('שגיאה', f'‏סריקה נכשלה:\n{e}')
 
     def _render_thumb(self, canvas, pos):
         img = self.parent.custom_icons.get(pos) or self._orig_imgs.get(pos)

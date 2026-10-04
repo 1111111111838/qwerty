@@ -396,6 +396,7 @@ to the device ABM format at deploy time.
         btns.pack(fill = 'x', padx = 16, pady = 12)
         tk.Button(btns, text = '✔ סגור', font = ('Segoe UI', 11, 'bold'), bg = '#06d6a0', fg = '#111215', relief = 'flat', padx = 16, pady = 6, cursor = 'hand2', command = self.destroy).pack(side = 'right', padx = 6)
         tk.Button(btns, text = '🔎 ייצא מפת אייקונים', font = ('Segoe UI', 10), bg = '#e07b39', fg = '#fff', relief = 'flat', padx = 12, pady = 6, cursor = 'hand2', command = self._export_atlas).pack(side = 'left', padx = 6)
+        tk.Button(btns, text = '🧭 סרוק מבנה תפריט', font = ('Segoe UI', 10), bg = '#2a9d8f', fg = '#fff', relief = 'flat', padx = 12, pady = 6, cursor = 'hand2', command = self._scan_menu).pack(side = 'left', padx = 6)
         tk.Label(self, text = 'לאחר בחירה, לחץ "החל והכן לצריבה" במסך הראשי.', font = ('Segoe UI', 9), fg = '#ffd166', bg = '#22252a').pack(pady = (0, 6))
 
     def _export_atlas(self):
@@ -408,6 +409,18 @@ to the device ABM format at deploy time.
             messagebox.showinfo('מפת אייקונים', f'‏נשמרה מפה של {n} אייקונים:\n{path}\n\nשלח/י את הקובץ הזה כדי שנזהה את אייקוני הבחירה (הווריאנט עם הצל וה-✓).')
         except Exception as e:
             messagebox.showerror('שגיאה', f'‏ייצוא נכשל:\n{e}')
+
+    def _scan_menu(self):
+        import os
+        try:
+            downloads = os.path.join(os.path.expanduser('~'), 'Downloads')
+            base = downloads if os.path.isdir(downloads) else os.path.expanduser('~')
+            out = os.path.join(base, 'q8_menu_scan.txt')
+            path, best = mmi_builder.scan_menu_structures(out)
+            found = ('נמצאה טבלת-תפריט מועמדת (אפשר אולי לערוך).' if best is not None else 'לא נמצאה טבלה במשאב — כנראה שהסדר בקוד החתום ולא ניתן לשינוי.')
+            messagebox.showinfo('סריקת מבנה תפריט', f'‏הדוח נשמר:\n{path}\n\n{found}\n\nשלח/י לי את הקובץ ואבדוק אם סידור התפריט ניתן לעריכה.')
+        except Exception as e:
+            messagebox.showerror('שגיאה', f'‏סריקה נכשלה:\n{e}')
 
     def _render_thumb(self, canvas, pos):
         img = self.parent.custom_icons.get(pos) or self._orig_imgs.get(pos)
