@@ -24,16 +24,16 @@ jobs:
         run: |
           sudo apt update
           
-          # התקנת חבילות שולחן עבודה, מנהל חלונות, גופנים ותמיכה בשפה העברית
+          # התקנת סביבת שולחן עבודה, מנהל חלונות, גופנים וכלי שפה
           sudo DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
             kde-plasma-desktop kwin-x11 dbus-x11 xserver-xorg-video-dummy \
-            libgl1-mesa-dri mesa-utils x11-xkb-utils locales \
+            libgl1-mesa-dri mesa-utils x11-xkb-utils locales language-pack-he \
             fonts-dejavu-core fonts-noto-core \
             dolphin konsole kate
 
           # יצירת locale עברי במערכת
           sudo locale-gen he_IL.UTF-8
-          sudo update-locale LANG=en_US.UTF-8
+          sudo update-locale LANG=he_IL.UTF-8 LANGUAGE=he_IL:he LC_ALL=he_IL.UTF-8
 
           # התקנת Google Chrome Remote Desktop
           wget -q https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
@@ -45,8 +45,15 @@ jobs:
           sudo apt install -y ./google-chrome-stable_current_amd64.deb || sudo apt --fix-broken install -y
           rm -f google-chrome-stable_current_amd64.deb
 
-          # הגדרת סשן הפעלה: טעינת עברית ל-X11 והרצת Plasma
+          # אכיפת ממשק כרום בעברית באמצעות מדיניות מנוהלת (Enterprise Policy)
+          sudo mkdir -p /etc/opt/chrome/policies/managed
+          echo '{"ApplicationLocaleValue": "he"}' | sudo tee /etc/opt/chrome/policies/managed/locale.json
+
+          # הגדרת סשן הפעלה: שפה עברית, פריסת מקלדת והרצת Plasma
           cat << 'EOF' > ~/.chrome-remote-desktop-session
+          export LANG=he_IL.UTF-8
+          export LANGUAGE=he_IL:he
+          export LC_ALL=he_IL.UTF-8
           export DESKTOP_SESSION=plasma
           export XDG_CURRENT_DESKTOP=KDE
           setxkbmap -model pc105 -layout us,il -option grp:alt_shift_toggle &
