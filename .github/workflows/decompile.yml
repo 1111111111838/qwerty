@@ -28,7 +28,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
             kde-plasma-desktop kwin-x11 dbus-x11 xserver-xorg-video-dummy \
             libgl1-mesa-dri mesa-utils x11-xkb-utils locales \
-            fonts-culmus fonts-dejavu-core fonts-noto-core \
+            fonts-dejavu-core fonts-noto-core \
             dolphin konsole kate
 
           # יצירת locale עברי במערכת
