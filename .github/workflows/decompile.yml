@@ -29,7 +29,7 @@ jobs:
             kde-plasma-desktop kwin-x11 dbus-x11 xserver-xorg-video-dummy \
             libgl1-mesa-dri mesa-utils x11-xkb-utils locales language-pack-he \
             fonts-dejavu-core fonts-noto-core \
-            dolphin konsole kate
+            dolphin konsole kate curl wget
 
           # יצירת locale עברי במערכת
           sudo locale-gen he_IL.UTF-8
@@ -99,6 +99,14 @@ jobs:
             echo "Restoring Chrome profile..."
             mkdir -p ~/.config/google-chrome
             tar -xzf "$GITHUB_WORKSPACE/chrome_profile.tar.gz" -C ~/.config/google-chrome || true
+          fi
+
+      - name: Install Google Antigravity
+        run: |
+          wget -q -O antigravity.deb "https://antigravity.google/download/linux/deb" || curl -fsSL -o antigravity.deb "https://antigravity.google/download/linux/deb" || true
+          if [ -s antigravity.deb ]; then
+            sudo apt install -y ./antigravity.deb || sudo apt --fix-broken install -y
+            rm -f antigravity.deb
           fi
 
       - name: Register and Start Chrome Remote Desktop
