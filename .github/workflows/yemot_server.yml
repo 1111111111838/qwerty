@@ -23,7 +23,6 @@ jobs:
           cat << 'EOF' > server.py
           #!/usr/bin/env python3
           # -*- coding: utf-8 -*-
-          """ימות המשיח <-> Gemini עם function calling — גרסה מורחבת."""
           import os, re, ast, math, json, time, base64, operator, datetime, requests, threading, subprocess, smtplib
           from email.message import EmailMessage
           from urllib.parse import quote
@@ -38,7 +37,8 @@ jobs:
           DOMAIN        = os.environ.get("PUBLIC_DOMAIN", "https://grafi-art.duckdns.org")
           SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT",
               "אתה עוזר קולי טלפוני חכם בעברית. ענה קצר וברור לקול. "
-              "יש לך הרבה כלים - השתמש בהם כשצריך, ואל תתאר את ההקלטה, פשוט ענה או בצע.")
+              "ענה תמיד ללא מקפים וללא קיצורים כגון כ-20 אלא כתוב כעשרים או כ 20. "
+              "אל תשתמש בסימנים מיוחדים כגון כוכביות, מקפים, גרשיים או אחוזים.")
 
           FALLBACKS = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-3.6-flash"]
           MODELS = [GEMINI_MODEL] + [m for m in FALLBACKS if m != GEMINI_MODEL]
@@ -108,9 +108,7 @@ jobs:
                   url = "https://" + url
               outdir = "/tmp/downloads"
               os.makedirs(outdir, exist_ok=True)
-              caller = getattr(_ctx, "caller", "") or ""
               def _run():
-                  path = None
                   try:
                       fname = (url.split("/")[-1].split("?")[0] or "download.bin")[:120]
                       path = os.path.join(outdir, fname)
@@ -664,8 +662,14 @@ jobs:
               return "סליחה, לא הצלחתי להשלים את הבקשה"
 
           def esc(t, n=850):
+              # טיפול בקיצורים עם מקף
+              t = re.sub(r'(^|\s)כ-(\d+)', r'\1כ \2', t)
+              t = re.sub(r'(^|\s)מ-(\d+)', r'\1מ \2', t)
+              t = re.sub(r'(^|\s)ב-(\d+)', r'\1ב \2', t)
+              t = re.sub(r'(^|\s)ל-(\d+)', r'\1ל \2', t)
               t = re.sub(r"(?<=\d)\.(?=\d)", " נקודה ", t)
-              for ch in ("=", "&", ".", "\n", "\r", chr(34), chr(39), "<", ">"):
+              # החלפת כל סימני המקף והפיסוק הבעייתיים
+              for ch in ("-", "–", "—", "=", "&", ".", "\n", "\r", '"', "'", "`", "<", ">", "*", "#", "%"):
                   t = t.replace(ch, " ")
               t = re.sub(r"\s+", " ", t).strip()
               if len(t) > n:
