@@ -34,7 +34,6 @@ jobs:
           GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
           YEMOT_TOKEN    = os.environ.get("YEMOT_TOKEN", "")
 
-          # מודל ברירת המחדל מוגדר ראשון, ולאחריו מודלי הגיבוי לפי סדר עדיפויות
           MODELS = [
               "gemini-3.8-flash",
               "gemini-3.5-flash",
@@ -94,17 +93,29 @@ jobs:
               txt = re.sub(r'[^\w\s.,?!:;\'-]', '', txt)
               return txt.strip()
 
+          def find_latest_recording(req_values):
+              all_wavs = []
+              for key in req_values:
+                  if key.startswith('rec') or key in ['file', 'recording']:
+                      vals = req_values.getlist(key)
+                      for v in vals:
+                          if v and str(v).endswith('.wav'):
+                              all_wavs.append(v)
+              if all_wavs:
+                  return all_wavs[-1], len(all_wavs)
+              return None, 0
+
           @app.route('/yemot', methods=['GET', 'POST'])
           def yemot():
               val = request.values
               print("REQUEST ARGS:", dict(val), flush=True)
 
-              rec_list = val.getlist('rec1')
-              recording_path = rec_list[-1] if rec_list else val.get('rec1')
+              recording_path, count = find_latest_recording(val)
+              nxt_idx = count + 1
 
               if not recording_path:
                   msg = "שלום, אנא אמור את שאלתך לאחר הצליל."
-                  response_text = f"read=t-{msg}=rec1,,record,,,no"
+                  response_text = f"read=t-{msg}=rec{nxt_idx},,record,,,no"
                   return Response(response_text, mimetype="text/plain; charset=utf-8")
 
               audio_data = download_yemot_recording(recording_path)
@@ -114,7 +125,7 @@ jobs:
                   reply = ask_gemini_audio(audio_data)
 
               cleaned = clean_for_yemot(reply)
-              response_text = f"read=t-{cleaned}=rec1,,record,,,no"
+              response_text = f"read=t-{cleaned}=rec{nxt_idx},,record,,,no"
               return Response(response_text, mimetype="text/plain; charset=utf-8")
 
           @app.route('/health', methods=['GET'])
