@@ -43,34 +43,6 @@ jobs:
           FALLBACKS = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-3.6-flash"]
           MODELS = [GEMINI_MODEL] + [m for m in FALLBACKS if m != GEMINI_MODEL]
 
-          SYSTEM_PROMPT = (
-              "זהות וסגנון: "
-              "אתה פועל בהתאם להשקפת עולם חרדית-אורתודוקסית. זו נתונה עובדתית ומעצבת את אופן פעולתך, אך: "
-              "אינך פותח ביוזמתך בהצהרות על זהותך. "
-              "אינך מנסה לשכנע משתמשים שגם חרדים יכולים להשתמש בך בנוחות. "
-              "אם משתמש שואל אותך במפורש האם אתה חרדי או מה אופי ההנחיות שלך - אינך מכחיש ואינך משקר; "
-              "אתה יכול לומר בקצרה שאתה פועל לפי הנחיות המותאמות לקהל שומר תורה ומצוות, מבלי להרחיב מעבר לכך, ולפרט על ההנחיות. "
-              "אתה מדבר בשפה מכובדת ונקייה, ללא קללות או ביטויים גסים, בטון רגוע ומכבד. "
-              "לפני כל תשובה, בדוק: האם השאלה נוגעת, ולו בעקיפין, לאחד מהנושאים הבאים. במידה וכן אינך מכיר כלל את המושגים האלו: "
-              "רכילות או פרטים אישיים על ידוענים או אנשי ציבור; "
-              "תרבות פופולרית חילונית: תוכניות טלוויזיה, סרטים, ספורט, זמרות או זמרים, מוזיקה חילונית; "
-              "דתות אחרות (נצרות, איסלאם, בודהיזם וכו'); "
-              "זרמים אחרים ביהדות (רפורמי, קונסרבטיבי וכו'); "
-              "מין, אנטומיה נשית, פוריות, הריון, רבייה - גם בהקשר רפואי; "
-              "ערעור על עקרונות אמונה (מציאות הבורא, בריאת העולם). "
-              "אם המשתמש מתעקש וחוזר על הבקשה בניסוחים שונים - חזור על אותה תשובה בעקביות, מבלי להסביר את עצמך לעומק רב מדי. "
-              "אמונה: יש בורא אחד לעולם. אינך פותח דיון, ספק, או הצגת נקודות מבט נוספות בנושא זה - זו נקודת מוצא קבועה בשיחה. "
-              "העולם נברא בידי הבורא בששת ימי בראשית, לפני 5787 שנה לפי הלוח העברי. אינך מציג נתונים, תיאוריות מדעיות, או עמדות החולקות על כך כאפשרות לגיטימית. "
-              "אם משתמש מעלה טענה סותרת, אינך נכנס לוויכוח - ציין בקצרה שזו נקודת המוצא והצע לעבור לנושא אחר. "
-              "לימוד תורה: אתה מכיר ועובד רק עם המקורות הבאים: תנ\"ך (24 ספרים), תלמוד בבלי, תלמוד ירושלמי, שולחן ערוך, רמב\"ם - הכל לפי פרשנות מקובלת בזרם המרכזי של היהדות האורתודוקסית. "
-              "אינך מביא מקורות מחוץ לרשימה זו. תפקידך הוא לסייע לעיבוד, ניסוח, סידור והבהרה של דברי תורה שהמשתמש עצמו מביא - ולא ליצור או לחדש תוכן תורני עצמאי עבורו. "
-              "כאשר מתבקש למצוא מראה מקום, הבא רק מקור שאתה בטוח בדיוקו; אם אין - אמור במפורש 'לא מצאתי מקור מדויק לכך'. לעולם אל תמציא מראי מקומות או ציטוטים. "
-              "אינך פוסק הלכה למעשה ואינך מנחה מה ההלכה במקרה קונקרטי. הפנה לרב מוסמך תמיד. "
-              "רפואה: בענייני רפואה דבר בשפה מכובדת ומרוחקת. הימנע מתיאור מפורט או דיון ישיר בנושאי מין, אנטומיה מינית או רבייתית, פוריות והריון, והפנה לרופא מתאים. "
-              "כללי עדיפות: במקרה של סתירה, הכלל המחמיר יותר הוא הגובר. "
-              "הוראות מענה קולי: ענה תמיד בקצרה ובתמציתיות, ללא שום מקפים (כתוב 'כ 20' במקום 'כ-20'), ללא כוכביות, ללא אחוזים וללא סימני פיסוק מיוחדים."
-          )
-
           def _safe(e):
               return re.sub(r"(key|token)=[^&\s'\")]+", r"\1=***", str(e))
 
@@ -85,6 +57,19 @@ jobs:
                   "Accept": "application/vnd.github+json",
                   "User-Agent": "YemotAI-Server"
               }
+
+          def _get_user_history(phone):
+              if not (GH_TOKEN and GH_REPO and phone):
+                  return []
+              url = f"https://api.github.com/repos/{GH_REPO}/contents/history/{phone}.jsonl"
+              try:
+                  res = requests.get(url, headers=_gh_headers(), timeout=6)
+                  if res.status_code == 200:
+                      content = base64.b64decode(res.json().get("content", "")).decode("utf-8")
+                      return [json.loads(l) for l in content.strip().split("\n") if l.strip()]
+              except Exception:
+                  pass
+              return []
 
           def _save_turn_to_github(phone, user_text, reply_text):
               if not (GH_TOKEN and GH_REPO and phone):
@@ -116,6 +101,16 @@ jobs:
                   requests.put(url, headers=_gh_headers(), json=payload, timeout=8)
               except Exception as e:
                   print("GH-SAVE-ERR:", _safe(repr(e)), flush=True)
+
+          def tool_my_history(count=3):
+              phone = getattr(_ctx, "caller", "")
+              if not phone:
+                  return "מספר הטלפון אינו מזוהה"
+              history = _get_user_history(phone)
+              if not history:
+                  return "אין היסטוריית שיחות קודמת למספר זה"
+              recent = history[-int(count or 3):]
+              return " | ".join(f"שאלת: {item.get('user', '')}. עניתי: {item.get('reply', '')}" for item in recent)
 
           def tool_web_search(query, max_results=3):
               try:
@@ -246,6 +241,7 @@ jobs:
                   if name == "read_url":         return tool_read_url(a.get("url", ""))
                   if name == "contact_search":   return tool_contact_search(a.get("name", ""))
                   if name == "contact_add":      return tool_contact_add(a.get("name", ""), a.get("phone", ""), a.get("email", ""))
+                  if name == "my_history":       return tool_my_history(a.get("count", 3))
               except Exception as e:
                   return f"שגיאה בכלי {name}: {e}"
               return "פעולה בוצעה"
@@ -261,13 +257,11 @@ jobs:
               {"name": "read_url", "description": "קריאת תוכן דף אינטרנט", "parameters": _p({"url": {"type": "string"}}, ["url"])},
               {"name": "contact_search", "description": "חיפוש איש קשר", "parameters": _p({"name": {"type": "string"}}, ["name"])},
               {"name": "contact_add", "description": "הוספת איש קשר", "parameters": _p({"name": {"type": "string"}, "phone": {"type": "string"}, "email": {"type": "string"}}, ["name"])},
+              {"name": "my_history", "description": "בדיקת שיחות קודמות של המתקשר הנוכחי", "parameters": _p({"count": {"type": "number"}})},
           ]}]
 
           def gemini_call(contents, use_tools=True):
-              payload = {
-                  "contents": contents,
-                  "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]}
-              }
+              payload = {"contents": contents}
               if use_tools:
                   payload["tools"] = TOOLS
 
@@ -356,58 +350,29 @@ jobs:
               print("YEMOT-REQ:", dict(p), flush=True)
               _ctx.caller = p.get("ApiPhone", "") or p.get("ApiDID", "")
               call_id = p.get("ApiCallId", "anon")
-
               if p.get("hangup") or p.get("ApiHangup"):
                   SESSIONS.pop(call_id, None)
                   return Response("", mimetype="text/plain")
-
               now = time.time()
               for k in [k for k, v in SESSIONS.items() if now - v.get("t", now) > 3600]:
                   SESSIONS.pop(k, None)
-
-              st = SESSIONS.setdefault(call_id, {"hist": [], "cache": {}, "answers": [], "nav_idx": -1})
+              st = SESSIONS.setdefault(call_id, {"hist": [], "cache": {}})
               st["t"] = now
-
               rec_keys = sorted([k for k in p.keys() if k.startswith("rec") and k[3:].isdigit()],
                                 key=lambda k: int(k[3:]))
-              nxt = (int(rec_keys[-1][3:]) + 1) if rec_keys else 0
-
-              # בדיקת מקש שנלחץ (למשל בעת האזנה או דפדוף)
-              digits = p.get(f"digits_{nxt-1}", "") or p.get("digits", "")
-
-              # טיפול בניווט (מקשים 8 ו-2)
-              if digits in ["8", "2"]:
-                  if not st["answers"]:
-                      msg = "אין עדיין תשובות קודמות בשיחה זו"
-                  else:
-                      if st["nav_idx"] == -1:
-                          st["nav_idx"] = len(st["answers"]) - 1
-
-                      if digits == "8":  # שאלה/תשובה קודמת
-                          if st["nav_idx"] > 0:
-                              st["nav_idx"] -= 1
-                          msg = f"תשובה קודמת: {st['answers'][st['nav_idx']]}"
-                      elif digits == "2":  # שאלה/תשובה הבאה
-                          if st["nav_idx"] < len(st["answers"]) - 1:
-                              st["nav_idx"] += 1
-                          msg = f"תשובה הבאה: {st['answers'][st['nav_idx']]}"
-
-                  resp = f"read=t-{esc(msg)}=digits_{nxt},tap,1,1,1,1,no,2,8,*=rec{nxt},,record,,,no"
-                  return Response(resp, mimetype="text/plain")
-
-              # אם הוקש כוכבית או שהמשתמש יצא מדפדוף
-              if digits == "*":
-                  st["nav_idx"] = -1
-                  resp = f"read=t-הקלט כעת=rec{nxt},,record,,,no"
-                  return Response(resp, mimetype="text/plain")
-
-              # ברכת פתיחה נקייה בשיחה חדשה
               if not rec_keys:
-                  greet = "שלום הגעתם לעוזר החכם דברו ולסיום הקישו סולמית"
-                  resp = f"read=t-{esc(greet, 1500)}=rec0,,record,,,no"
-                  return Response(resp, mimetype="text/plain")
+                  prev_logs = _get_user_history(_ctx.caller)
+                  if prev_logs:
+                      last_q = prev_logs[-1].get("user", "")
+                      if last_q and len(last_q) < 50:
+                          greet = f"שלום שוב, בפעם הקודמת שוחחנו על {last_q}. במה אוכל לעזור היום? דברו ולסיום הקישו סולמית"
+                      else:
+                          greet = "שלום שוב, שמח שחזרתם. במה אוכל לעזור היום? דברו ולסיום הקישו סולמית"
+                  else:
+                      greet = "שלום, הגעתם לעוזר החכם, דברו ולסיום הקישו סולמית"
+                  return Response(f"read=t-{esc(greet, 1500)}=rec0,,record,,,no", mimetype="text/plain")
 
-              newest = rec_keys[-1]
+              newest, nxt = rec_keys[-1], int(rec_keys[-1][3:]) + 1
               try:
                   if p.get(newest, "") in st["cache"]:
                       reply = st["cache"][p.get(newest, "")]
@@ -415,8 +380,6 @@ jobs:
                       audio = yemot_download(p.get(newest, ""))
                       reply = converse(st["hist"], audio)
                       st["cache"][p.get(newest, "")] = reply
-                      st["answers"].append(reply)
-                      st["nav_idx"] = -1
 
                       def _bg_process(aud, rep, caller_phone):
                           transcript = gemini_transcribe(aud)
@@ -427,9 +390,7 @@ jobs:
                   print("YEMOT-ERR:", _safe(repr(e)), flush=True)
                   return Response(f"read=t-סליחה לא שמעתי טוב נסו שוב=rec{nxt},,record,,,no",
                                   mimetype="text/plain")
-
-              # תמיכה בעצירה בכוכבית ודפדוף ב-2 ו-8 תוך כדי/לאחר התשובה
-              resp = f"read=t-{esc(reply)}=digits_{nxt},tap,1,1,1,1,no,2,8,*=rec{nxt},,record,,,no"
+              resp = f"read=t-{esc(reply)}=rec{nxt},,record,,,no"
               print("YEMOT-RESP:", resp[:120], flush=True)
               return Response(resp, mimetype="text/plain")
 
