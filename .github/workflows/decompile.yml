@@ -24,15 +24,15 @@ jobs:
         run: |
           sudo apt update
           
-          # התקנת סביבת שולחן עבודה, מנהל חלונות, ספריות תצוגה וכלי מערכת
+          # התקנת שולחן עבודה KDE, שרתי תצוגה וספריות תואמות ל-Ubuntu 24.04
           sudo DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
             kde-plasma-desktop kwin-x11 dbus-x11 xserver-xorg-video-dummy \
-            libgl1-mesa-dri libgl1-mesa-glx libosmesa6 mesa-utils mesa-utils-extra libgles2-mesa \
+            libgl1-mesa-dri libgl1 libglx-mesa0 libosmesa6 mesa-utils libgles2 \
             x11-xkb-utils locales language-pack-he \
             fonts-dejavu-core fonts-noto-core \
             dolphin konsole kate curl wget
 
-          # הגדרת שפה עברית למערכת
+          # הגדרת עברית במערכת
           sudo locale-gen he_IL.UTF-8
           sudo update-locale LANG=he_IL.UTF-8 LANGUAGE=he_IL:he LC_ALL=he_IL.UTF-8
 
@@ -41,16 +41,16 @@ jobs:
           sudo apt install -y ./chrome-remote-desktop_current_amd64.deb || sudo apt --fix-broken install -y
           rm -f chrome-remote-desktop_current_amd64.deb
 
-          # התקנת דפדפן Google Chrome
+          # התקנת Google Chrome
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo apt install -y ./google-chrome-stable_current_amd64.deb || sudo apt --fix-broken install -y
           rm -f google-chrome-stable_current_amd64.deb
 
-          # אכיפת ממשק כרום בעברית
+          # אכיפת שפה עברית לכרום
           sudo mkdir -p /etc/opt/chrome/policies/managed
           echo '{"ApplicationLocaleValue": "he"}' | sudo tee /etc/opt/chrome/policies/managed/locale.json
 
-          # הגדרת סשן הפעלה: שפה, מקלדת והרצת Plasma
+          # קובץ הפעלת הסשן
           cat << 'EOF' > ~/.chrome-remote-desktop-session
           export LANG=he_IL.UTF-8
           export LANGUAGE=he_IL:he
@@ -75,14 +75,14 @@ jobs:
           Timeout=0
           EOF
 
-          # כפתורי חלונות
+          # הגדרת כפתורי חלון
           cat << 'EOF' > ~/.config/kwinrc
           [org.kde.kdecoration2]
           ButtonsOnRight=IAX
           ButtonsOnLeft=M
           EOF
 
-          # מעבר שפות במקלדת
+          # פריסת מקלדת עברית
           cat << 'EOF' > ~/.config/kxkbrc
           [Layout]
           DisplayNames=,
@@ -117,7 +117,7 @@ jobs:
         run: |
           mkdir -p /home/runner/Desktop
 
-          # יצירת קיצור דרך בשולחן העבודה ל-Antigravity עם תמיכת WebGL מובנית
+          # יצירת קיצור דרך בשולחן העבודה ל-Antigravity עם תמיכת רינדור מובנית
           cat << 'EOF' > /home/runner/Desktop/Antigravity.desktop
           [Desktop Entry]
           Version=1.0
@@ -130,7 +130,7 @@ jobs:
           Categories=Development;
           EOF
 
-          # קיצור דרך לכרום הכולל דגלי רינדור תוכנתי למניעת שגיאות WebGL2
+          # קיצור דרך לכרום עם דגלי רינדור תוכנתי למניעת שגיאות WebGL2
           cat << 'EOF' > /home/runner/Desktop/Google-Chrome.desktop
           [Desktop Entry]
           Version=1.0
@@ -172,7 +172,6 @@ jobs:
       - name: Save Chrome Profile to Repository
         if: always()
         run: |
-          # סגירת הדפדפן בלבד באופן בטוח מבלי לפגוע בחיבור ה-Remote Desktop
           pkill -x chrome || pkill -x google-chrome || true
           sleep 3
 
