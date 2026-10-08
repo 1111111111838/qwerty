@@ -3,6 +3,9 @@ name: Yemot AI Server
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   run-server:
     runs-on: ubuntu-latest
@@ -34,6 +37,8 @@ jobs:
           GMAIL_USER    = os.environ.get("GMAIL_USER", "")
           GMAIL_PASS    = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
           OWNER_EMAIL   = os.environ.get("OWNER_EMAIL", GMAIL_USER)
+          GH_TOKEN      = os.environ.get("GITHUB_TOKEN", "")
+          GH_REPO       = os.environ.get("GITHUB_REPOSITORY", "")
 
           FALLBACKS = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-3.6-flash"]
           MODELS = [GEMINI_MODEL] + [m for m in FALLBACKS if m != GEMINI_MODEL]
@@ -46,6 +51,67 @@ jobs:
           SESSIONS = {}
           _ctx = threading.local()
 
+          # ---- שמירה ושליפה מ-GitHub ----
+          def _gh_headers():
+              return {
+                  "Authorization": f"Bearer {GH_TOKEN}",
+                  "Accept": "application/vnd.github+json",
+                  "User-Agent": "YemotAI-Server"
+              }
+
+          def _save_turn_to_github(phone, user_text, reply_text):
+              if not (GH_TOKEN and GH_REPO and phone):
+                  return
+              path = f"history/{phone}.jsonl"
+              url = f"https://api.github.com/repos/{GH_REPO}/contents/{path}"
+              entry = json.dumps({
+                  "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                  "user": user_text,
+                  "reply": reply_text
+              }, ensure_ascii=False) + "\n"
+              try:
+                  res = requests.get(url, headers=_gh_headers(), timeout=10)
+                  if res.status_code == 200:
+                      info = res.json()
+                      prev = base64.b64decode(info.get("content", "")).decode("utf-8")
+                      new_content = prev + entry
+                      sha = info.get("sha")
+                      payload = {
+                          "message": f"Update call log for {phone}",
+                          "content": base64.b64encode(new_content.encode("utf-8")).decode("utf-8"),
+                          "sha": sha
+                      }
+                  else:
+                      payload = {
+                          "message": f"Create call log for {phone}",
+                          "content": base64.b64encode(entry.encode("utf-8")).decode("utf-8")
+                      }
+                  requests.put(url, headers=_gh_headers(), json=payload, timeout=12)
+              except Exception as e:
+                  print("GH-SAVE-ERR:", _safe(repr(e)), flush=True)
+
+          def _get_history_from_github(phone, count=3):
+              if not (GH_TOKEN and GH_REPO and phone):
+                  return "אין גישה לקובצי ההיסטוריה"
+              url = f"https://api.github.com/repos/{GH_REPO}/contents/history/{phone}.jsonl"
+              try:
+                  res = requests.get(url, headers=_gh_headers(), timeout=10)
+                  if res.status_code != 200:
+                      return "אין היסטוריית שיחות קודמת למספר זה"
+                  content = base64.b64decode(res.json().get("content", "")).decode("utf-8")
+                  lines = [json.loads(l) for l in content.strip().split("\n") if l.strip()]
+                  recent = lines[-count:]
+                  return " | ".join(f"שאלת: {item.get('user', '')}. עניתי: {item.get('reply', '')}" for item in recent)
+              except Exception as e:
+                  return f"שגיאה בקריאת היסטוריה: {e}"
+
+          def tool_my_history(count=3):
+              phone = getattr(_ctx, "caller", "")
+              if not phone:
+                  return "מספר הטלפון אינו מזוהה"
+              return _get_history_from_github(phone, int(count or 3))
+
+          # ---- כלים נוספים ----
           def tool_web_search(query, max_results=3):
               try:
                   from ddgs import DDGS
@@ -175,6 +241,7 @@ jobs:
                   if name == "read_url":         return tool_read_url(a.get("url", ""))
                   if name == "contact_search":   return tool_contact_search(a.get("name", ""))
                   if name == "contact_add":      return tool_contact_add(a.get("name", ""), a.get("phone", ""), a.get("email", ""))
+                  if name == "my_history":       return tool_my_history(a.get("count", 3))
               except Exception as e:
                   return f"שגיאה בכלי {name}: {e}"
               return "פעולה בוצעה"
@@ -190,6 +257,7 @@ jobs:
               {"name": "read_url", "description": "קריאת תוכן דף אינטרנט", "parameters": _p({"url": {"type": "string"}}, ["url"])},
               {"name": "contact_search", "description": "חיפוש איש קשר", "parameters": _p({"name": {"type": "string"}}, ["name"])},
               {"name": "contact_add", "description": "הוספת איש קשר", "parameters": _p({"name": {"type": "string"}, "phone": {"type": "string"}, "email": {"type": "string"}}, ["name"])},
+              {"name": "my_history", "description": "בדיקת שיחות קודמות של המתקשר הנוכחי", "parameters": _p({"count": {"type": "number"}})},
           ]}]
 
           def gemini_call(contents, use_tools=True):
@@ -210,6 +278,22 @@ jobs:
                       last = f"{m}: {_safe(repr(e))}"
                       continue
               raise RuntimeError(f"gemini failed: {last}")
+
+          def gemini_transcribe(audio_bytes):
+              payload = {"contents": [{"role": "user", "parts": [
+                  {"inline_data": {"mime_type": "audio/wav", "data": base64.b64encode(audio_bytes).decode()}},
+                  {"text": "תמלל את ההקלטה במדויק. החזר רק את התמלול ללא הערות."}
+              ]}]}
+              for m in MODELS:
+                  try:
+                      r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_KEY}",
+                                        json=payload, timeout=10)
+                      if r.status_code == 200:
+                          txt = "".join(p.get("text", "") for p in r.json().get("candidates", [{}])[0].get("content", {}).get("parts", []))
+                          if txt: return txt.strip()
+                  except Exception:
+                      continue
+              return "[תמלול לא זמין]"
 
           def converse(history, audio_bytes):
               contents = list(history)
@@ -264,6 +348,7 @@ jobs:
           def yemot():
               p = request.values
               print("YEMOT-REQ:", dict(p), flush=True)
+              _ctx.caller = p.get("ApiPhone", "") or p.get("ApiDID", "")
               call_id = p.get("ApiCallId", "anon")
               if p.get("hangup") or p.get("ApiHangup"):
                   SESSIONS.pop(call_id, None)
@@ -286,6 +371,13 @@ jobs:
                       audio = yemot_download(p.get(newest, ""))
                       reply = converse(st["hist"], audio)
                       st["cache"][p.get(newest, "")] = reply
+
+                      # תמלול ושמירה ל-GitHub ברקע
+                      def _bg_process(aud, rep, caller_phone):
+                          transcript = gemini_transcribe(aud)
+                          _save_turn_to_github(caller_phone, transcript, rep)
+                      threading.Thread(target=_bg_process, args=(audio, reply, _ctx.caller), daemon=True).start()
+
               except Exception as e:
                   print("YEMOT-ERR:", _safe(repr(e)), flush=True)
                   return Response(f"read=t-סליחה לא שמעתי טוב נסו שוב=rec{nxt},,record,,,no",
@@ -307,6 +399,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           YEMOT_TOKEN: ${{ secrets.YEMOT_TOKEN }}
           GEMINI_MODEL: "gemini-3.8-flash"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 server.py &
           sleep 2
