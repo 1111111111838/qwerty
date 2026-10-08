@@ -31,13 +31,8 @@ jobs:
           app = Flask(__name__)
 
           GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-          GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+          GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
           YEMOT_TOKEN    = os.environ.get("YEMOT_TOKEN", "")
-
-          SYSTEM_PROMPT = (
-              "אתה עוזר קולי טלפוני חכם, מנומס וענייני בעברית. "
-              "ענה תשובות תמציתיות, ברורות ומותאמות לשמיעה בטלפון, ללא שום סימני עיצוב מיוחדים (כגון כוכביות, סולמיות או מקפים מיותרים)."
-          )
 
           client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
@@ -67,11 +62,8 @@ jobs:
                               data=audio_bytes,
                               mime_type="audio/wav",
                           ),
-                          "הקשב לשאלת המשתמש וענה עליה בעברית בצורה קצרה, מכובדת וברורה להשמעה בטלפון."
-                      ],
-                      config=types.GenerateContentConfig(
-                          system_instruction=SYSTEM_PROMPT
-                      )
+                          "הקשב לשאלת המשתמש וענה עליה בקצרה ובאופן ברור להשמעה קולית בטלפון ללא עיצוב טקסט."
+                      ]
                   )
                   return response.text.strip() if response.text else "לא התקבלה תשובה."
               except Exception as e:
@@ -119,7 +111,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           YEMOT_TOKEN: ${{ secrets.YEMOT_TOKEN }}
-          GEMINI_MODEL: "gemini-2.5-flash"
+          GEMINI_MODEL: "gemini-3.8-flash"
         run: |
           python3 server.py &
           sleep 2
