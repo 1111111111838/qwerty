@@ -1,0 +1,123 @@
+name: Yemot AI Server
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install flask requests duckduckgo_search
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
+
+      - name: Create Server Script
+        run: |
+          cat << 'EOF' > server.py
+          import os
+          import re
+          import json
+          import requests
+          from flask import Flask, request, Response
+
+          app = Flask(__name__)
+
+          GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+          GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+          SYSTEM_PROMPT = os.environ.get(
+              "SYSTEM_PROMPT",
+              "אתה עוזר קולי טלפוני חכם, מנומס וענייני בעברית. ענה תשובות תמציתיות, ברורות ומותאמות לשמיעה בטלפון ללא שימוש בעיצוב טקסט מיוחד."
+          )
+
+          def ask_gemini(user_text):
+              if not GEMINI_API_KEY:
+                  return "מפתח הגישה לבינה המלאכותית אינו מוגדר."
+              url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+              headers = {"Content-Type": "application/json"}
+              payload = {
+                  "contents": [{"parts": [{"text": user_text}]}],
+                  "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]}
+              }
+              try:
+                  res = requests.post(url, headers=headers, json=payload, timeout=25)
+                  data = res.json()
+                  ans = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                  return ans.strip() if ans else "לא התקבלה תשובה ברורה."
+              except Exception as e:
+                  return "אירעה שגיאה בעיבוד הפנייה."
+
+          def clean_for_yemot(txt):
+              txt = re.sub(r'[\r\n\t]+', ' ', txt)
+              txt = txt.replace('"', "''").replace('&', ' ו')
+              txt = re.sub(r'[^\w\s.,?!:;\'-]', '', txt)
+              return txt.strip()
+
+          @app.route('/yemot', methods=['GET', 'POST'])
+          def yemot():
+              val = request.values
+              user_text = (
+                  val.get('ApiText')
+                  or val.get('text')
+                  or val.get('ApiAnswer')
+                  or val.get('ApiHangup')
+                  or ""
+              ).strip()
+
+              if not user_text:
+                  reply = "שלום, אנא אמור את שאלתך לאחר הצליל."
+              else:
+                  reply = ask_gemini(user_text)
+
+              cleaned = clean_for_yemot(reply)
+              # פקודת מענה לימות המשיח המקריאה את התשובה ועוברת להקלטה ותמלול חוזר
+              response_text = f"read=t-{cleaned}=rec1,,record,,,no"
+              return Response(response_text, mimetype="text/plain; charset=utf-8")
+
+          @app.route('/health', methods=['GET'])
+          def health():
+              return {"status": "ok"}
+
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=5000)
+          EOF
+
+      - name: Run Server and Tunnel
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: "gemini-2.5-flash"
+        run: |
+          python3 server.py &
+          sleep 2
+          cloudflared tunnel --url http://127.0.0.1:5000 --no-autoupdate > tunnel.log 2>&1 &
+          
+          echo "ממתין לקבלת כתובת השרת..."
+          FOUND=0
+          for i in {1..30}; do
+            URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' tunnel.log | head -n 1)
+            if [ -n "$URL" ]; then
+              echo "=========================================================="
+              echo "השרת מוכן לפעולה!"
+              echo "הכתובת עבור api_link בימות המשיח היא:"
+              echo "$URL/yemot"
+              echo "=========================================================="
+              FOUND=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ $FOUND -eq 0 ]; then
+            echo "שגיאה: לא התקבלה כתובת ממנהרת Cloudflare."
+            cat tunnel.log
+            exit 1
+          fi
+
+          # השארת התהליך פעיל להאזנה לבקשות
+          wait -n
