@@ -23,10 +23,10 @@ jobs:
           cat << 'EOF' > server.py
           #!/usr/bin/env python3
           # -*- coding: utf-8 -*-
-          import os, re, ast, math, json, time, base64, operator, datetime, requests, threading, subprocess, smtplib
+          import os, re, json, time, base64, requests, threading, subprocess, smtplib
           from email.message import EmailMessage
           from urllib.parse import quote
-          from flask import Flask, request, Response, send_from_directory
+          from flask import Flask, request, Response
 
           GEMINI_KEY    = os.environ.get("GEMINI_API_KEY", "")
           GEMINI_MODEL  = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
@@ -34,18 +34,6 @@ jobs:
           GMAIL_USER    = os.environ.get("GMAIL_USER", "")
           GMAIL_PASS    = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
           OWNER_EMAIL   = os.environ.get("OWNER_EMAIL", GMAIL_USER)
-          DOMAIN        = os.environ.get("PUBLIC_DOMAIN", "https://grafi-art.duckdns.org")
-
-          SYSTEM_PROMPT = (
-              "אתה פועל לפי השקפת עולם חרדית-אורתודוקסית בשפה מכובדת ונקייה, בטון רגוע ומכבד. "
-              "אינך פותח בהצהרות על זהותך. "
-              "אינך עוסק ברכילות, אישים ידוענים, תרבות פופולרית חילונית, מוזיקה או סרטים חילוניים, "
-              "דתות אחרות, זרמים אחרים ביהדות, או נושאי צניעות ורבייה. "
-              "יש בורא אחד לעולם שבראו בששת ימי בראשית. "
-              "בלימוד תורה מותר להביא אך ורק מקורות מתוך: תנ\"ך, תלמוד בבלי, תלמוד ירושלמי, שולחן ערוך ורמב\"ם, כסיוע לדברי המשתמש. אין לפסוק הלכה למעשה (יש להפנות לרב מוסמך). "
-              "בענייני רפואה דבר בריחוק ללא פירוט איברים פנימיים או פריון והפנה לרופא. "
-              "ענה תמיד באופן קצר, ענייני, ללא מקפים (כתוב 'כ 20' במקום 'כ-20'), ללא כוכביות, ללא אחוזים וללא סימני פיסוק מיוחדים."
-          )
 
           FALLBACKS = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-3.6-flash"]
           MODELS = [GEMINI_MODEL] + [m for m in FALLBACKS if m != GEMINI_MODEL]
@@ -93,110 +81,100 @@ jobs:
               except Exception as e:
                   return f"שליחת המייל נכשלה: {e}"
 
-          _OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
-                  ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod,
-                  ast.FloorDiv: operator.floordiv, ast.USub: operator.neg, ast.UAdd: operator.pos}
-          _FUNCS = {"sqrt": math.sqrt, "abs": abs, "round": round, "floor": math.floor, "ceil": math.ceil,
-                    "min": min, "max": max}
+          def tool_download_website(url):
+              if not url.startswith("http"):
+                  url = "https://" + url
+              def _run():
+                  outdir = "/tmp/sites"
+                  os.makedirs(outdir, exist_ok=True)
+                  try:
+                      subprocess.run(["wget", "--mirror", "--convert-links", "--adjust-extension",
+                                      "--page-requisites", "--no-parent", "--timeout=25", "--tries=2",
+                                      "-P", outdir, url], timeout=600)
+                      _send_mail("הורדת אתר הושלמה", f"האתר {url} הורד לשרת")
+                  except Exception as e:
+                      try: _send_mail("הורדת אתר נכשלה", f"{url}: {e}")
+                      except Exception: pass
+              threading.Thread(target=_run, daemon=True).start()
+              return f"התחלתי להוריד את האתר {url} ברקע. יישלח מייל בסיום."
 
-          def _ev(n):
-              if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)): return n.value
-              if isinstance(n, ast.BinOp):
-                  l, r = _ev(n.left), _ev(n.right)
-                  return _OPS[type(n.op)](l, r)
-              if isinstance(n, ast.UnaryOp): return _OPS[type(n.op)](_ev(n.operand))
-              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in _FUNCS:
-                  args = [_ev(a) for a in n.args]
-                  return _FUNCS[n.func.id](*args)
-              raise ValueError("bad")
+          def tool_download_file(url, email=False):
+              if not url.startswith("http"):
+                  url = "https://" + url
+              outdir = "/tmp/downloads"
+              os.makedirs(outdir, exist_ok=True)
+              def _run():
+                  try:
+                      fname = (url.split("/")[-1].split("?")[0] or "download.bin")[:120]
+                      path = os.path.join(outdir, fname)
+                      with requests.get(url, stream=True, timeout=60, headers=UA) as r:
+                          r.raise_for_status()
+                          with open(path, "wb") as f:
+                              for chunk in r.iter_content(65536):
+                                  f.write(chunk)
+                      size = (os.path.getsize(path) / (1024 * 1024)) if path and os.path.exists(path) else 0
+                      body = "הקובץ מהכתובת %s הורד לשרת. גודל: %.1f MB" % (url, size)
+                      _send_mail("הורדת קובץ הושלמה", body, attach=(path if (email and size <= 23) else None))
+                  except Exception as e:
+                      try: _send_mail("הורדת קובץ נכשלה", "%s: %s" % (url, e))
+                      except Exception: pass
+              threading.Thread(target=_run, daemon=True).start()
+              return "התחלתי להוריד את הקובץ ברקע."
 
-          def tool_calculate(expr):
+          def tool_read_url(url):
+              if not url.startswith("http"):
+                  url = "https://" + url
               try:
-                  t = str(expr or "").lower().replace("x", "*").replace(":", "/")
-                  v = _ev(ast.parse(t, mode="eval").body)
-                  if isinstance(v, float) and v.is_integer(): v = int(v)
-                  return f"התוצאה היא {v}"
-              except Exception:
-                  return "לא הצלחתי לחשב את הביטוי"
-
-          def tool_weather(city):
-              try:
-                  g = requests.get("https://geocoding-api.open-meteo.com/v1/search",
-                                   params={"name": city, "count": 1, "language": "he"}, timeout=8).json()
-                  res = g.get("results")
-                  if not res: return "לא מצאתי את המיקום"
-                  lat, lon = res[0]["latitude"], res[0]["longitude"]
-                  nm = res[0].get("name", city)
-                  w = requests.get("https://api.open-meteo.com/v1/forecast",
-                                   params={"latitude": lat, "longitude": lon,
-                                           "current": "temperature_2m",
-                                           "daily": "temperature_2m_max,temperature_2m_min",
-                                           "timezone": "auto"}, timeout=8).json()
-                  cur = w.get("current", {}); daily = w.get("daily", {})
-                  t = cur.get("temperature_2m")
-                  hi = (daily.get("temperature_2m_max") or [None])[0]
-                  lo = (daily.get("temperature_2m_min") or [None])[0]
-                  return f"מזג האוויר ב{nm}: כעת {t} מעלות, מקסימום היום {hi}, מינימום {lo}"
+                  html = requests.get(url, timeout=12, headers=UA).text
+                  html = re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", html)
+                  text = re.sub(r"(?s)<[^>]+>", " ", html)
+                  text = re.sub(r"\s+", " ", text).strip()
+                  return text[:1500] or "הדף ריק"
               except Exception as e:
-                  return f"שגיאת מזג אוויר: {e}"
+                  return f"שגיאת קריאת דף: {e}"
 
-          CITY_GEO = {"ירושלים": 281184, "תל אביב": 293397, "חיפה": 294801, "באר שבע": 295530,
-                      "בני ברק": 293918, "מודיעין": 281184, "בית שמש": 281184, "אשדוד": 295629}
-
-          def _hm(v): return v[11:16] if isinstance(v, str) and len(v) >= 16 else "-"
-
-          def tool_zmanim(city="ירושלים"):
+          CONTACTS_FILE = "/tmp/contacts.json"
+          def _load_contacts():
               try:
-                  geo = CITY_GEO.get((city or "").strip(), 281184)
-                  d = requests.get("https://www.hebcal.com/zmanim",
-                                   params={"cfg": "json", "geonameid": geo}, timeout=8).json()
-                  t = d.get("times", {})
-                  return f"זמנים ל{city}: הנץ החמה {_hm(t.get('sunrise'))}, סוף זמן שמע {_hm(t.get('sofZmanShma'))}, חצות {_hm(t.get('chatzot'))}, שקיעה {_hm(t.get('sunset'))}"
-              except Exception as e:
-                  return f"שגיאת זמנים: {e}"
-
-          def tool_hebrew_date():
-              try:
-                  today = datetime.date.today()
-                  c = requests.get("https://www.hebcal.com/converter",
-                                   params={"cfg": "json", "gy": today.year, "gm": today.month,
-                                           "gd": today.day, "g2h": 1, "lg": "h"}, timeout=8).json()
-                  return "היום " + c.get("hebrew", "")
-              except Exception as e:
-                  return f"שגיאת תאריך עברי: {e}"
-
-          def tool_shabbat(city="ירושלים"):
-              try:
-                  city = (city or "ירושלים").strip()
-                  d = requests.get("https://www.hebcal.com/shabbat",
-                                   params={"cfg": "json", "geonameid": CITY_GEO.get(city, 281184), "lg": "h", "M": "on"}, timeout=8).json()
-                  out = []
-                  for it in d.get("items", []):
-                      if it.get("category") in ("candles", "havdalah", "parashat"):
-                          tm = re.search(r"\d{1,2}:\d{2}", it.get("title", ""))
-                          out.append((it.get("hebrew") or it.get("title", "")) + ((" " + tm.group(0)) if tm else ""))
-                  return f"שבת ב{city}: " + ", ".join(out)
-              except Exception as e:
-                  return f"שגיאת נתוני שבת: {e}"
-
-          def tool_now():
-              try:
-                  from zoneinfo import ZoneInfo
-                  n = datetime.datetime.now(ZoneInfo("Asia/Jerusalem"))
-              except Exception:
-                  n = datetime.datetime.now()
-              days = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
-              return "היום יום %s השעה %02d:%02d" % (days[n.weekday()], n.hour, n.minute)
+                  with open(CONTACTS_FILE, encoding="utf-8") as f: return json.load(f)
+              except Exception: return []
+          def _save_contacts(c):
+              with open(CONTACTS_FILE, "w", encoding="utf-8") as f: json.dump(c, f, ensure_ascii=False, indent=1)
+          def _find_contacts(name):
+              name = (name or "").strip().lower()
+              c = _load_contacts()
+              if not name: return c
+              return [x for x in c if name in x.get("name", "").lower() or name in x.get("phone", "")]
+          def _resolve_email(x):
+              x = (x or "").strip()
+              if "@" in x: return x
+              for h in _find_contacts(x):
+                  if h.get("email"): return h["email"]
+              return ""
+          def tool_contact_search(name):
+              hits = _find_contacts(name)
+              if not hits: return "לא נמצא איש קשר בשם " + (name or "")
+              return "; ".join(f"{x.get('name')} - טלפון {x.get('phone','אין')}, מייל {x.get('email','אין')}" for x in hits[:6])
+          def tool_contact_add(name, phone="", email=""):
+              c = _load_contacts()
+              for x in c:
+                  if x.get("name", "").strip() == (name or "").strip():
+                      if phone: x["phone"] = phone.strip()
+                      if email: x["email"] = email.strip()
+                      _save_contacts(c); return f"עודכן איש הקשר {name}"
+              c.append({"name": (name or "").strip(), "phone": (phone or "").strip(), "email": (email or "").strip()})
+              _save_contacts(c)
+              return f"נוסף איש קשר {name}"
 
           def dispatch(name, a):
               try:
-                  if name == "web_search":   return tool_web_search(a.get("query", ""))
-                  if name == "calculate":    return tool_calculate(a.get("expression", ""))
-                  if name == "weather":      return tool_weather(a.get("city", "ירושלים"))
-                  if name == "zmanim":       return tool_zmanim(a.get("city", "ירושלים"))
-                  if name == "shabbat":      return tool_shabbat(a.get("city", "ירושלים"))
-                  if name == "hebrew_date":  return tool_hebrew_date()
-                  if name == "now":          return tool_now()
+                  if name == "web_search":       return tool_web_search(a.get("query", ""))
+                  if name == "send_email":       return tool_send_email(a.get("subject", ""), a.get("body", ""), a.get("to", ""))
+                  if name == "download_website": return tool_download_website(a.get("url", ""))
+                  if name == "download_file":    return tool_download_file(a.get("url", ""), bool(a.get("email", False)))
+                  if name == "read_url":         return tool_read_url(a.get("url", ""))
+                  if name == "contact_search":   return tool_contact_search(a.get("name", ""))
+                  if name == "contact_add":      return tool_contact_add(a.get("name", ""), a.get("phone", ""), a.get("email", ""))
               except Exception as e:
                   return f"שגיאה בכלי {name}: {e}"
               return "פעולה בוצעה"
@@ -206,19 +184,16 @@ jobs:
 
           TOOLS = [{"function_declarations": [
               {"name": "web_search", "description": "חיפוש מידע עדכני", "parameters": _p({"query": {"type": "string"}}, ["query"])},
-              {"name": "calculate", "description": "חישוב חשבוני מדויק", "parameters": _p({"expression": {"type": "string"}}, ["expression"])},
-              {"name": "weather", "description": "מזג אוויר בעיר", "parameters": _p({"city": {"type": "string"}}, ["city"])},
-              {"name": "zmanim", "description": "זמני היום בהלכה", "parameters": _p({"city": {"type": "string"}})},
-              {"name": "shabbat", "description": "כניסת ויציאת שבת", "parameters": _p({"city": {"type": "string"}})},
-              {"name": "hebrew_date", "description": "תאריך עברי", "parameters": _p({})},
-              {"name": "now", "description": "שעה נוכחית בישראל", "parameters": _p({})},
+              {"name": "send_email", "description": "שליחת מייל", "parameters": _p({"subject": {"type": "string"}, "body": {"type": "string"}, "to": {"type": "string"}}, ["subject", "body"])},
+              {"name": "download_website", "description": "הורדת אתר לשרת", "parameters": _p({"url": {"type": "string"}}, ["url"])},
+              {"name": "download_file", "description": "הורדת קובץ לשרת", "parameters": _p({"url": {"type": "string"}, "email": {"type": "boolean"}}, ["url"])},
+              {"name": "read_url", "description": "קריאת תוכן דף אינטרנט", "parameters": _p({"url": {"type": "string"}}, ["url"])},
+              {"name": "contact_search", "description": "חיפוש איש קשר", "parameters": _p({"name": {"type": "string"}}, ["name"])},
+              {"name": "contact_add", "description": "הוספת איש קשר", "parameters": _p({"name": {"type": "string"}, "phone": {"type": "string"}, "email": {"type": "string"}}, ["name"])},
           ]}]
 
           def gemini_call(contents, use_tools=True):
-              payload = {
-                  "contents": contents,
-                  "system_instruction": {"parts": [{"text": SYSTEM_PROMPT + " " + tool_now()}]}
-              }
+              payload = {"contents": contents}
               if use_tools:
                   payload["tools"] = TOOLS
 
