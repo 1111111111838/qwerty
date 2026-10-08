@@ -24,18 +24,19 @@ jobs:
         run: |
           sudo apt update
           
-          # התקנת סביבת שולחן עבודה, מנהל חלונות, גופנים וכלי שפה
+          # התקנת סביבת שולחן עבודה, מנהל חלונות, ספריות תצוגה וכלי מערכת
           sudo DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
             kde-plasma-desktop kwin-x11 dbus-x11 xserver-xorg-video-dummy \
-            libgl1-mesa-dri mesa-utils x11-xkb-utils locales language-pack-he \
+            libgl1-mesa-dri libgl1-mesa-glx libosmesa6 mesa-utils mesa-utils-extra libgles2-mesa \
+            x11-xkb-utils locales language-pack-he \
             fonts-dejavu-core fonts-noto-core \
             dolphin konsole kate curl wget
 
-          # יצירת locale עברי במערכת
+          # הגדרת שפה עברית למערכת
           sudo locale-gen he_IL.UTF-8
           sudo update-locale LANG=he_IL.UTF-8 LANGUAGE=he_IL:he LC_ALL=he_IL.UTF-8
 
-          # התקנת Google Chrome Remote Desktop
+          # התקנת Chrome Remote Desktop
           wget -q https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
           sudo apt install -y ./chrome-remote-desktop_current_amd64.deb || sudo apt --fix-broken install -y
           rm -f chrome-remote-desktop_current_amd64.deb
@@ -45,11 +46,11 @@ jobs:
           sudo apt install -y ./google-chrome-stable_current_amd64.deb || sudo apt --fix-broken install -y
           rm -f google-chrome-stable_current_amd64.deb
 
-          # אכיפת ממשק כרום בעברית באמצעות מדיניות מנוהלת (Enterprise Policy)
+          # אכיפת ממשק כרום בעברית
           sudo mkdir -p /etc/opt/chrome/policies/managed
           echo '{"ApplicationLocaleValue": "he"}' | sudo tee /etc/opt/chrome/policies/managed/locale.json
 
-          # הגדרת סשן הפעלה: שפה עברית, פריסת מקלדת והרצת Plasma
+          # הגדרת סשן הפעלה: שפה, מקלדת והרצת Plasma
           cat << 'EOF' > ~/.chrome-remote-desktop-session
           export LANG=he_IL.UTF-8
           export LANGUAGE=he_IL:he
@@ -74,14 +75,14 @@ jobs:
           Timeout=0
           EOF
 
-          # הגדרת כפתורי בקרה על החלונות: איקס, ריבוע, מינוס (IAX)
+          # כפתורי חלונות
           cat << 'EOF' > ~/.config/kwinrc
           [org.kde.kdecoration2]
           ButtonsOnRight=IAX
           ButtonsOnLeft=M
           EOF
 
-          # הגדרת פריסת מקלדת עברית ומעבר שפה ב-KDE Plasma
+          # מעבר שפות במקלדת
           cat << 'EOF' > ~/.config/kxkbrc
           [Layout]
           DisplayNames=,
@@ -103,11 +104,46 @@ jobs:
 
       - name: Install Google Antigravity
         run: |
-          wget -q -O antigravity.deb "https://antigravity.google/download/linux/deb" || curl -fsSL -o antigravity.deb "https://antigravity.google/download/linux/deb" || true
-          if [ -s antigravity.deb ]; then
-            sudo apt install -y ./antigravity.deb || sudo apt --fix-broken install -y
-            rm -f antigravity.deb
+          sudo mkdir -p /opt/antigravity
+          curl -fsSL "https://storage.googleapis.com/antigravity-public/antigravity-hub/2.21.1-5614635819335680/linux-x64/Antigravity.tar.gz" | sudo tar -xz -C /opt/antigravity --strip-components=1
+          sudo ln -sf /opt/antigravity/antigravity /usr/local/bin/antigravity
+          
+          if [ -f /opt/antigravity/chrome-sandbox ]; then
+            sudo chown root:root /opt/antigravity/chrome-sandbox
+            sudo chmod 4755 /opt/antigravity/chrome-sandbox
           fi
+
+      - name: Create Desktop Shortcuts (Antigravity & Chrome with WebGL)
+        run: |
+          mkdir -p /home/runner/Desktop
+
+          # יצירת קיצור דרך בשולחן העבודה ל-Antigravity עם תמיכת WebGL מובנית
+          cat << 'EOF' > /home/runner/Desktop/Antigravity.desktop
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=Google Antigravity
+          Comment=Antigravity Agent Platform
+          Exec=/opt/antigravity/antigravity --no-sandbox --use-gl=angle --use-angle=swiftshader --enable-webgl --ignore-gpu-blocklist
+          Icon=utilities-terminal
+          Terminal=false
+          Categories=Development;
+          EOF
+
+          # קיצור דרך לכרום הכולל דגלי רינדור תוכנתי למניעת שגיאות WebGL2
+          cat << 'EOF' > /home/runner/Desktop/Google-Chrome.desktop
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=Google Chrome
+          Exec=/usr/bin/google-chrome-stable --no-sandbox --use-gl=angle --use-angle=swiftshader --enable-webgl --ignore-gpu-blocklist %U
+          Icon=google-chrome
+          Terminal=false
+          Categories=Network;WebBrowser;
+          EOF
+
+          chmod +x /home/runner/Desktop/*.desktop
+          sudo cp /home/runner/Desktop/*.desktop /usr/share/applications/
 
       - name: Register and Start Chrome Remote Desktop
         run: |
@@ -117,7 +153,6 @@ jobs:
 
           RAW_CMD="${{ github.event.inputs.crd_auth_code }}"
 
-          # זיהוי אוטומטי אם הוזנה פקודה מלאה או רק מחרוזת קוד
           if [[ "$RAW_CMD" =~ --code= ]] || [[ "$RAW_CMD" =~ start-host ]]; then
             CMD=$(echo "$RAW_CMD" | sed -E "s/--name=[^ ]+/--name=$CUSTOM_NAME/")
             eval "$CMD --pin=${{ github.event.inputs.crd_pin }}"
@@ -137,7 +172,8 @@ jobs:
       - name: Save Chrome Profile to Repository
         if: always()
         run: |
-          pkill -f chrome || true
+          # סגירת הדפדפן בלבד באופן בטוח מבלי לפגוע בחיבור ה-Remote Desktop
+          pkill -x chrome || pkill -x google-chrome || true
           sleep 3
 
           if [ -d "$HOME/.config/google-chrome" ]; then
