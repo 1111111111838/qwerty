@@ -51,13 +51,25 @@ jobs:
           SESSIONS = {}
           _ctx = threading.local()
 
-          # ---- שמירה ושליפה מ-GitHub ----
           def _gh_headers():
               return {
                   "Authorization": f"Bearer {GH_TOKEN}",
                   "Accept": "application/vnd.github+json",
                   "User-Agent": "YemotAI-Server"
               }
+
+          def _get_user_history(phone):
+              if not (GH_TOKEN and GH_REPO and phone):
+                  return []
+              url = f"https://api.github.com/repos/{GH_REPO}/contents/history/{phone}.jsonl"
+              try:
+                  res = requests.get(url, headers=_gh_headers(), timeout=6)
+                  if res.status_code == 200:
+                      content = base64.b64decode(res.json().get("content", "")).decode("utf-8")
+                      return [json.loads(l) for l in content.strip().split("\n") if l.strip()]
+              except Exception:
+                  pass
+              return []
 
           def _save_turn_to_github(phone, user_text, reply_text):
               if not (GH_TOKEN and GH_REPO and phone):
@@ -70,48 +82,36 @@ jobs:
                   "reply": reply_text
               }, ensure_ascii=False) + "\n"
               try:
-                  res = requests.get(url, headers=_gh_headers(), timeout=10)
+                  res = requests.get(url, headers=_gh_headers(), timeout=6)
                   if res.status_code == 200:
                       info = res.json()
                       prev = base64.b64decode(info.get("content", "")).decode("utf-8")
                       new_content = prev + entry
                       sha = info.get("sha")
                       payload = {
-                          "message": f"Update call log for {phone}",
+                          "message": f"Update log for {phone}",
                           "content": base64.b64encode(new_content.encode("utf-8")).decode("utf-8"),
                           "sha": sha
                       }
                   else:
                       payload = {
-                          "message": f"Create call log for {phone}",
+                          "message": f"Create log for {phone}",
                           "content": base64.b64encode(entry.encode("utf-8")).decode("utf-8")
                       }
-                  requests.put(url, headers=_gh_headers(), json=payload, timeout=12)
+                  requests.put(url, headers=_gh_headers(), json=payload, timeout=8)
               except Exception as e:
                   print("GH-SAVE-ERR:", _safe(repr(e)), flush=True)
-
-          def _get_history_from_github(phone, count=3):
-              if not (GH_TOKEN and GH_REPO and phone):
-                  return "אין גישה לקובצי ההיסטוריה"
-              url = f"https://api.github.com/repos/{GH_REPO}/contents/history/{phone}.jsonl"
-              try:
-                  res = requests.get(url, headers=_gh_headers(), timeout=10)
-                  if res.status_code != 200:
-                      return "אין היסטוריית שיחות קודמת למספר זה"
-                  content = base64.b64decode(res.json().get("content", "")).decode("utf-8")
-                  lines = [json.loads(l) for l in content.strip().split("\n") if l.strip()]
-                  recent = lines[-count:]
-                  return " | ".join(f"שאלת: {item.get('user', '')}. עניתי: {item.get('reply', '')}" for item in recent)
-              except Exception as e:
-                  return f"שגיאה בקריאת היסטוריה: {e}"
 
           def tool_my_history(count=3):
               phone = getattr(_ctx, "caller", "")
               if not phone:
                   return "מספר הטלפון אינו מזוהה"
-              return _get_history_from_github(phone, int(count or 3))
+              history = _get_user_history(phone)
+              if not history:
+                  return "אין היסטוריית שיחות קודמת למספר זה"
+              recent = history[-int(count or 3):]
+              return " | ".join(f"שאלת: {item.get('user', '')}. עניתי: {item.get('reply', '')}" for item in recent)
 
-          # ---- כלים נוספים ----
           def tool_web_search(query, max_results=3):
               try:
                   from ddgs import DDGS
@@ -361,8 +361,17 @@ jobs:
               rec_keys = sorted([k for k in p.keys() if k.startswith("rec") and k[3:].isdigit()],
                                 key=lambda k: int(k[3:]))
               if not rec_keys:
-                  greet = "שלום, הגעתם לעוזר החכם, דברו ולסיום הקישו סולמית"
+                  prev_logs = _get_user_history(_ctx.caller)
+                  if prev_logs:
+                      last_q = prev_logs[-1].get("user", "")
+                      if last_q and len(last_q) < 50:
+                          greet = f"שלום שוב, בפעם הקודמת שוחחנו על {last_q}. במה אוכל לעזור היום? דברו ולסיום הקישו סולמית"
+                      else:
+                          greet = "שלום שוב, שמח שחזרתם. במה אוכל לעזור היום? דברו ולסיום הקישו סולמית"
+                  else:
+                      greet = "שלום, הגעתם לעוזר החכם, דברו ולסיום הקישו סולמית"
                   return Response(f"read=t-{esc(greet, 1500)}=rec0,,record,,,no", mimetype="text/plain")
+
               newest, nxt = rec_keys[-1], int(rec_keys[-1][3:]) + 1
               try:
                   if p.get(newest, "") in st["cache"]:
@@ -372,7 +381,6 @@ jobs:
                       reply = converse(st["hist"], audio)
                       st["cache"][p.get(newest, "")] = reply
 
-                      # תמלול ושמירה ל-GitHub ברקע
                       def _bg_process(aud, rep, caller_phone):
                           transcript = gemini_transcribe(aud)
                           _save_turn_to_github(caller_phone, transcript, rep)
