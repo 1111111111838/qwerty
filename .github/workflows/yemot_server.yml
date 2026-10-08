@@ -14,7 +14,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install flask requests duckduckgo_search
+          pip install flask requests ddgs
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb
 
@@ -35,10 +35,17 @@ jobs:
           GMAIL_PASS    = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
           OWNER_EMAIL   = os.environ.get("OWNER_EMAIL", GMAIL_USER)
           DOMAIN        = os.environ.get("PUBLIC_DOMAIN", "https://grafi-art.duckdns.org")
-          SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT",
-              "אתה עוזר קולי טלפוני חכם בעברית. ענה קצר וברור לקול. "
-              "ענה תמיד ללא מקפים וללא קיצורים כגון כ-20 אלא כתוב כעשרים או כ 20. "
-              "אל תשתמש בסימנים מיוחדים כגון כוכביות, מקפים, גרשיים או אחוזים.")
+
+          SYSTEM_PROMPT = (
+              "אתה פועל לפי השקפת עולם חרדית-אורתודוקסית בשפה מכובדת ונקייה, בטון רגוע ומכבד. "
+              "אינך פותח בהצהרות על זהותך. "
+              "אינך עוסק ברכילות, אישים ידוענים, תרבות פופולרית חילונית, מוזיקה או סרטים חילוניים, "
+              "דתות אחרות, זרמים אחרים ביהדות, או נושאי צניעות ורבייה. "
+              "יש בורא אחד לעולם שבראו בששת ימי בראשית. "
+              "בלימוד תורה מותר להביא אך ורק מקורות מתוך: תנ\"ך, תלמוד בבלי, תלמוד ירושלמי, שולחן ערוך ורמב\"ם, כסיוע לדברי המשתמש. אין לפסוק הלכה למעשה (יש להפנות לרב מוסמך). "
+              "בענייני רפואה דבר בריחוק ללא פירוט איברים פנימיים או פריון והפנה לרופא. "
+              "ענה תמיד באופן קצר, ענייני, ללא מקפים (כתוב 'כ 20' במקום 'כ-20'), ללא כוכביות, ללא אחוזים וללא סימני פיסוק מיוחדים."
+          )
 
           FALLBACKS = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-3.6-flash"]
           MODELS = [GEMINI_MODEL] + [m for m in FALLBACKS if m != GEMINI_MODEL]
@@ -51,13 +58,13 @@ jobs:
           SESSIONS = {}
           _ctx = threading.local()
 
-          def tool_web_search(query, max_results=4):
+          def tool_web_search(query, max_results=3):
               try:
-                  from duckduckgo_search import DDGS
+                  from ddgs import DDGS
                   rows = list(DDGS().text(query, region="il-he", max_results=max_results))[:max_results]
                   if not rows:
                       return "לא נמצאו תוצאות"
-                  return "\n".join(f"{r.get('title')} - {(r.get('body') or '')[:180]}" for r in rows)
+                  return "\n".join(f"{r.get('title')} - {(r.get('body') or '')[:140]}" for r in rows)
               except Exception as e:
                   return f"שגיאת חיפוש: {e}"
 
@@ -86,168 +93,65 @@ jobs:
               except Exception as e:
                   return f"שליחת המייל נכשלה: {e}"
 
-          def tool_download_website(url):
-              if not url.startswith("http"):
-                  url = "https://" + url
-              def _run():
-                  outdir = "/tmp/sites"
-                  os.makedirs(outdir, exist_ok=True)
-                  try:
-                      subprocess.run(["wget", "--mirror", "--convert-links", "--adjust-extension",
-                                      "--page-requisites", "--no-parent", "--timeout=25", "--tries=2",
-                                      "-P", outdir, url], timeout=600)
-                      _send_mail("הורדת אתר הושלמה", f"האתר {url} הורד לשרת")
-                  except Exception as e:
-                      try: _send_mail("הורדת אתר נכשלה", f"{url}: {e}")
-                      except Exception: pass
-              threading.Thread(target=_run, daemon=True).start()
-              return f"התחלתי להוריד את האתר {url} ברקע. יישלח מייל בסיום."
-
-          def tool_download_file(url, email=False, sms=False):
-              if not url.startswith("http"):
-                  url = "https://" + url
-              outdir = "/tmp/downloads"
-              os.makedirs(outdir, exist_ok=True)
-              def _run():
-                  try:
-                      fname = (url.split("/")[-1].split("?")[0] or "download.bin")[:120]
-                      path = os.path.join(outdir, fname)
-                      with requests.get(url, stream=True, timeout=60, headers=UA) as r:
-                          r.raise_for_status()
-                          with open(path, "wb") as f:
-                              for chunk in r.iter_content(65536):
-                                  f.write(chunk)
-                      size = (os.path.getsize(path) / (1024 * 1024)) if path and os.path.exists(path) else 0
-                      body = "הקובץ מהכתובת %s הורד לשרת. גודל: %.1f MB" % (url, size)
-                      _send_mail("הורדת קובץ הושלמה", body, attach=(path if (email and size <= 23) else None))
-                  except Exception as e:
-                      try: _send_mail("הורדת קובץ נכשלה", "%s: %s" % (url, e))
-                      except Exception: pass
-              threading.Thread(target=_run, daemon=True).start()
-              return "התחלתי להוריד את הקובץ ברקע."
-
           _OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
                   ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod,
                   ast.FloorDiv: operator.floordiv, ast.USub: operator.neg, ast.UAdd: operator.pos}
           _FUNCS = {"sqrt": math.sqrt, "abs": abs, "round": round, "floor": math.floor, "ceil": math.ceil,
-                    "log": math.log, "ln": math.log, "log10": math.log10, "log2": math.log2, "exp": math.exp,
-                    "sin": math.sin, "cos": math.cos, "tan": math.tan, "factorial": math.factorial,
                     "min": min, "max": max}
-          _CONSTS = {"pi": math.pi, "e": math.e}
 
           def _ev(n):
               if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)): return n.value
               if isinstance(n, ast.BinOp):
                   l, r = _ev(n.left), _ev(n.right)
-                  if isinstance(n.op, ast.Pow) and (abs(r) > 1000 or abs(l) > 1e15):
-                      raise ValueError("too big")
                   return _OPS[type(n.op)](l, r)
               if isinstance(n, ast.UnaryOp): return _OPS[type(n.op)](_ev(n.operand))
-              if isinstance(n, ast.Name) and n.id in _CONSTS: return _CONSTS[n.id]
-              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in _FUNCS and not n.keywords:
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in _FUNCS:
                   args = [_ev(a) for a in n.args]
-                  if n.func.id == "factorial" and (not args or args[0] > 500): raise ValueError("too big")
                   return _FUNCS[n.func.id](*args)
               raise ValueError("bad")
 
-          def _norm_expr(expr):
-              t = re.sub(r"(?<=\d),(?=\d{3})", "", str(expr or "").lower()).replace("\u00d7", "*").replace("\u00f7", "/")
-              t = t.replace("\u221a", "sqrt").replace("\u03c0", "pi").replace("^", "**")
-              t = re.sub(r"(\d+(?:\.\d+)?)\s*%\s*(?:of|\u05de)\s*(\d+(?:\.\d+)?)", r"(\1/100*\2)", t)
-              t = re.sub(r"(\d+(?:\.\d+)?)\s*%", r"(\1/100)", t)
-              return t
-
           def tool_calculate(expr):
               try:
-                  v = _ev(ast.parse(_norm_expr(expr), mode="eval").body)
-                  if isinstance(v, float):
-                      if v.is_integer() and abs(v) < 1e15: v = int(v)
-                      else: v = round(v, 6)
+                  t = str(expr or "").lower().replace("x", "*").replace(":", "/")
+                  v = _ev(ast.parse(t, mode="eval").body)
+                  if isinstance(v, float) and v.is_integer(): v = int(v)
                   return f"התוצאה היא {v}"
-              except ZeroDivisionError:
-                  return "אי אפשר לחלק באפס"
               except Exception:
                   return "לא הצלחתי לחשב את הביטוי"
-
-          def tool_wikipedia(query):
-              try:
-                  s = requests.get("https://he.wikipedia.org/w/api.php",
-                                   params={"action": "query", "list": "search", "srsearch": query,
-                                           "format": "json", "srlimit": 1}, timeout=12, headers=UA).json()
-                  hits = s.get("query", {}).get("search", [])
-                  if not hits:
-                      return "לא נמצא ערך בוויקיפדיה"
-                  title = hits[0]["title"]
-                  su = requests.get("https://he.wikipedia.org/api/rest_v1/page/summary/" + quote(title),
-                                    timeout=12, headers=UA).json()
-                  return (su.get("extract", "") or "אין תקציר")[:800]
-              except Exception as e:
-                  return f"שגיאת ויקיפדיה: {e}"
-
-          def tool_currency(amount, base, target):
-              try:
-                  base = base.upper(); target = target.upper()
-                  d = requests.get(f"https://open.er-api.com/v6/latest/{base}", timeout=12).json()
-                  rates = d.get("rates", {})
-                  if target not in rates:
-                      return "אחד המטבעות לא נתמך"
-                  val = float(amount) * rates[target]
-                  return f"{amount} {base} שווה {val:.2f} {target}"
-              except Exception as e:
-                  return f"שגיאת המרת מטבע: {e}"
 
           def tool_weather(city):
               try:
                   g = requests.get("https://geocoding-api.open-meteo.com/v1/search",
-                                   params={"name": city, "count": 1, "language": "he"}, timeout=12).json()
+                                   params={"name": city, "count": 1, "language": "he"}, timeout=8).json()
                   res = g.get("results")
-                  if not res:
-                      return "לא מצאתי את המיקום"
+                  if not res: return "לא מצאתי את המיקום"
                   lat, lon = res[0]["latitude"], res[0]["longitude"]
                   nm = res[0].get("name", city)
                   w = requests.get("https://api.open-meteo.com/v1/forecast",
                                    params={"latitude": lat, "longitude": lon,
-                                           "current": "temperature_2m,relative_humidity_2m,wind_speed_10m",
+                                           "current": "temperature_2m",
                                            "daily": "temperature_2m_max,temperature_2m_min",
-                                           "timezone": "auto"}, timeout=12).json()
+                                           "timezone": "auto"}, timeout=8).json()
                   cur = w.get("current", {}); daily = w.get("daily", {})
-                  t = cur.get("temperature_2m"); hum = cur.get("relative_humidity_2m")
+                  t = cur.get("temperature_2m")
                   hi = (daily.get("temperature_2m_max") or [None])[0]
                   lo = (daily.get("temperature_2m_min") or [None])[0]
-                  return (f"מזג האוויר ב{nm}: כעת {t} מעלות, לחות {hum} אחוז, "
-                          f"מקסימום היום {hi}, מינימום {lo}")
+                  return f"מזג האוויר ב{nm}: כעת {t} מעלות, מקסימום היום {hi}, מינימום {lo}"
               except Exception as e:
                   return f"שגיאת מזג אוויר: {e}"
 
           CITY_GEO = {"ירושלים": 281184, "תל אביב": 293397, "חיפה": 294801, "באר שבע": 295530,
-                      "אשדוד": 295629, "נתניה": 294071, "בני ברק": 293918, "פתח תקווה": 293322,
-                      "ראשון לציון": 293703, "אשקלון": 295721, "רחובות": 293725, "בית שמש": 281184,
-                      "מודיעין": 281184, "צפת": 294071, "טבריה": 293322, "אילת": 295277}
+                      "בני ברק": 293918, "מודיעין": 281184, "בית שמש": 281184, "אשדוד": 295629}
 
-          def _hm(v):
-              return v[11:16] if isinstance(v, str) and len(v) >= 16 else "-"
+          def _hm(v): return v[11:16] if isinstance(v, str) and len(v) >= 16 else "-"
 
           def tool_zmanim(city="ירושלים"):
               try:
                   geo = CITY_GEO.get((city or "").strip(), 281184)
                   d = requests.get("https://www.hebcal.com/zmanim",
-                                   params={"cfg": "json", "geonameid": geo}, timeout=12).json()
+                                   params={"cfg": "json", "geonameid": geo}, timeout=8).json()
                   t = d.get("times", {})
-                  def g(*keys):
-                      for k in keys:
-                          if t.get(k): return _hm(t[k])
-                      return "-"
-                  parts = [f"זמנים ל{city or 'ירושלים'}",
-                           "עלות השחר " + g("alotHaShachar"),
-                           "הנץ החמה " + g("sunrise"),
-                           "סוף זמן שמע " + g("sofZmanShmaMGA", "sofZmanShma"),
-                           "סוף זמן תפילה " + g("sofZmanTfillaMGA", "sofZmanTfilla"),
-                           "חצות " + g("chatzot"),
-                           "מנחה גדולה " + g("minchaGedola"),
-                           "פלג המנחה " + g("plagHaMincha"),
-                           "שקיעה " + g("sunset"),
-                           "צאת הכוכבים " + g("tzeit7083deg", "tzeit85deg", "tzeit42min")]
-                  return ", ".join(parts)
+                  return f"זמנים ל{city}: הנץ החמה {_hm(t.get('sunrise'))}, סוף זמן שמע {_hm(t.get('sofZmanShma'))}, חצות {_hm(t.get('chatzot'))}, שקיעה {_hm(t.get('sunset'))}"
               except Exception as e:
                   return f"שגיאת זמנים: {e}"
 
@@ -256,249 +160,24 @@ jobs:
                   today = datetime.date.today()
                   c = requests.get("https://www.hebcal.com/converter",
                                    params={"cfg": "json", "gy": today.year, "gm": today.month,
-                                           "gd": today.day, "g2h": 1, "lg": "h"}, timeout=12).json()
-                  heb = c.get("hebrew", "")
-                  events = ", ".join(c.get("events", []) or [])
-                  parsha = cand = ""
-                  try:
-                      sh = requests.get("https://www.hebcal.com/shabbat",
-                                        params={"cfg": "json", "geonameid": 281184, "lg": "h"}, timeout=12).json()
-                      for it in sh.get("items", []):
-                          if it.get("category") == "parashat":
-                              parsha = it.get("hebrew") or it.get("title", "")
-                          if it.get("category") == "candles" and not cand:
-                              cand = it.get("hebrew") or it.get("title", "")
-                  except Exception:
-                      pass
-                  out = "היום " + heb
-                  if events: out += ". " + events
-                  if parsha: out += ". פרשת השבוע " + parsha
-                  if cand:   out += ". " + cand
-                  return out
+                                           "gd": today.day, "g2h": 1, "lg": "h"}, timeout=8).json()
+                  return "היום " + c.get("hebrew", "")
               except Exception as e:
                   return f"שגיאת תאריך עברי: {e}"
 
-          def tool_daf_yomi():
+          def tool_shabbat(city="ירושלים"):
               try:
-                  today = datetime.date.today().isoformat()
-                  d = requests.get("https://www.hebcal.com/hebcal",
-                                   params={"cfg": "json", "v": "1", "start": today, "end": today,
-                                           "maj": "off", "min": "off", "nx": "off", "mf": "off",
-                                           "c": "off", "ss": "off", "geo": "none", "F": "on",
-                                           "lg": "h"}, timeout=12).json()
+                  city = (city or "ירושלים").strip()
+                  d = requests.get("https://www.hebcal.com/shabbat",
+                                   params={"cfg": "json", "geonameid": CITY_GEO.get(city, 281184), "lg": "h", "M": "on"}, timeout=8).json()
+                  out = []
                   for it in d.get("items", []):
-                      if it.get("category") == "dafyomi":
-                          return "הדף היומי היום: " + (it.get("hebrew") or it.get("title", ""))
-                  return "לא נמצא דף יומי להיום"
+                      if it.get("category") in ("candles", "havdalah", "parashat"):
+                          tm = re.search(r"\d{1,2}:\d{2}", it.get("title", ""))
+                          out.append((it.get("hebrew") or it.get("title", "")) + ((" " + tm.group(0)) if tm else ""))
+                  return f"שבת ב{city}: " + ", ".join(out)
               except Exception as e:
-                  return f"שגיאת דף יומי: {e}"
-
-          def tool_send_sms(message, phone=""):
-              try:
-                  target = _resolve_phone(phone) or getattr(_ctx, "caller", "") or ""
-                  if not target:
-                      return "אין מספר טלפון לשליחה"
-                  r = requests.get("https://www.call2all.co.il/ym/api/SendSms",
-                                   params={"token": YEMOT_TOKEN, "phones": target, "message": message},
-                                   timeout=30)
-                  try: j = r.json()
-                  except Exception: j = {"raw": r.text[:120]}
-                  ok = str(j.get("responseStatus", "")).upper() == "OK" or j.get("success")
-                  return f"הודעת SMS נשלחה אל {target}" if ok else f"שליחת SMS: {j}"
-              except Exception as e:
-                  return f"שגיאת SMS: {e}"
-
-          def tool_read_url(url):
-              if not url.startswith("http"):
-                  url = "https://" + url
-              try:
-                  html = requests.get(url, timeout=20, headers=UA).text
-                  html = re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", html)
-                  text = re.sub(r"(?s)<[^>]+>", " ", html)
-                  text = re.sub(r"\s+", " ", text).strip()
-                  return text[:3000] or "הדף ריק"
-              except Exception as e:
-                  return f"שגיאת קריאת דף: {e}"
-
-          def tool_tehillim(chapter):
-              try:
-                  ch = int(re.sub(r"\D", "", str(chapter)) or 0)
-                  if not (1 <= ch <= 150):
-                      return "מספר פרק לא תקין, בחר בין 1 ל150"
-                  d = requests.get(f"https://www.sefaria.org/api/texts/Psalms.{ch}",
-                                   params={"lang": "he", "context": 0}, timeout=12, headers=UA).json()
-                  he = d.get("he") or []
-                  txt = " ".join(re.sub(r"<[^>]+>", "", v) for v in he) if isinstance(he, list) else re.sub(r"<[^>]+>", "", str(he))
-                  return f"תהילים פרק {ch}: " + txt[:2500]
-              except Exception as e:
-                  return f"שגיאת תהילים: {e}"
-
-          _GEM = {'א':1,'ב':2,'ג':3,'ד':4,'ה':5,'ו':6,'ז':7,'ח':8,'ט':9,'י':10,
-                  'כ':20,'ך':20,'ל':30,'מ':40,'ם':40,'נ':50,'ן':50,'ס':60,'ע':70,
-                  'פ':80,'ף':80,'צ':90,'ץ':90,'ק':100,'ר':200,'ש':300,'ת':400}
-
-          def tool_gematria(text):
-              t = text or ""
-              val = sum(_GEM.get(c, 0) for c in t)
-              return f"הגימטריה של {t.strip()} היא {val}"
-
-          def tool_convert_date(date):
-              try:
-                  s = re.sub(r"[.]", "-", str(date)).strip()
-                  parts = [p for p in re.split(r"[-/ ]", s) if p]
-                  if len(parts) != 3:
-                      return "פורמט תאריך לא תקין, למשל 2026-10-15"
-                  a, b, c = parts
-                  if len(a) == 4: y, m, d = int(a), int(b), int(c)
-                  else: d, m, y = int(a), int(b), int(c)
-                  r = requests.get("https://www.hebcal.com/converter",
-                                   params={"cfg": "json", "gy": y, "gm": m, "gd": d, "g2h": 1, "lg": "h"},
-                                   timeout=12).json()
-                  heb = r.get("hebrew", "")
-                  ev = ", ".join(r.get("events", []) or [])
-                  return f"{d}/{m}/{y} הוא {heb}" + (". " + ev if ev else "")
-              except Exception as e:
-                  return f"שגיאת המרת תאריך: {e}"
-
-          def _flat(x):
-              out = []
-              if isinstance(x, list):
-                  for i in x: out += _flat(i)
-              elif x:
-                  out.append(re.sub(r"<[^>]+>", "", str(x)))
-              return out
-
-          def tool_daily_study(topic=""):
-              try:
-                  cal = requests.get("https://www.sefaria.org/api/calendars", timeout=12, headers=UA).json()
-                  items = cal.get("calendar_items", [])
-                  want = (topic or "").strip()
-                  def he_t(it): return (it.get("title", {}) or {}).get("he", "")
-                  pick = None
-                  for it in items:
-                      tt = he_t(it)
-                      if want and want in tt: pick = it; break
-                      if not want and "משנה" in tt: pick = it; break
-                  if not pick and items: pick = items[0]
-                  if not pick: return "לא נמצא לימוד יומי"
-                  ref = pick.get("ref", "")
-                  disp = (pick.get("displayValue", {}) or {}).get("he", "")
-                  title = he_t(pick)
-                  txt = ""
-                  if ref:
-                      t = requests.get("https://www.sefaria.org/api/texts/" + quote(ref),
-                                       params={"lang": "he", "context": 0}, timeout=12, headers=UA).json()
-                      txt = " ".join(_flat(t.get("he") or []))[:1800]
-                  return (f"{title} - {disp}: {txt}") if txt else f"{title} - {disp}"
-              except Exception as e:
-                  return f"שגיאת לימוד יומי: {e}"
-
-          def tool_translate(text, to_lang="en"):
-              try:
-                  src = "he" if any("\u0590" <= c <= "\u05FF" for c in (text or "")) else "en"
-                  if src == to_lang:
-                      src = "en" if to_lang != "en" else "he"
-                  r = requests.get("https://api.mymemory.translated.net/get",
-                                   params={"q": text, "langpair": f"{src}|{to_lang}"},
-                                   timeout=12, headers=UA).json()
-                  out = (r.get("responseData") or {}).get("translatedText", "")
-                  return out or "לא הצלחתי לתרגם"
-              except Exception as e:
-                  return f"שגיאת תרגום: {e}"
-
-          def tool_news(topic=""):
-              try:
-                  if topic:
-                      u = "https://news.google.com/rss/search?q=" + quote(topic) + "&hl=he&gl=IL&ceid=IL:he"
-                  else:
-                      u = "https://news.google.com/rss?hl=he&gl=IL&ceid=IL:he"
-                  xml = requests.get(u, timeout=12, headers=UA).text
-                  titles = [re.sub(r"<!\[CDATA\[|\]\]>", "", t).strip() for t in re.findall(r"<title>(.*?)</title>", xml, re.S)]
-                  titles = [t for t in titles[1:] if t][:6]
-                  return " | ".join(titles) if titles else "לא נמצאו חדשות"
-              except Exception as e:
-                  return f"שגיאת חדשות: {e}"
-
-          def tool_crypto(coin="bitcoin"):
-              try:
-                  r = requests.get("https://api.coingecko.com/api/v3/simple/price",
-                                   params={"ids": coin, "vs_currencies": "ils,usd"}, timeout=12, headers=UA).json()
-                  if coin not in r: return "מטבע קריפטו לא נמצא, נסה bitcoin או ethereum"
-                  return f"{coin}: {r[coin].get('ils','?')} שקל, {r[coin].get('usd','?')} דולר"
-              except Exception as e:
-                  return f"שגיאת קריפטו: {e}"
-
-          def tool_stock(symbol):
-              try:
-                  sym = (symbol or "").strip().upper()
-                  r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
-                                   timeout=12, headers=UA).json()
-                  res = (r.get("chart", {}).get("result") or [None])[0]
-                  if not res: return "לא נמצאה מניה"
-                  meta = res.get("meta", {})
-                  price = meta.get("regularMarketPrice"); cur = meta.get("currency", "")
-                  name = meta.get("shortName") or sym
-                  return f"{name} ({sym}): {price} {cur}"
-              except Exception as e:
-                  return f"שגיאת מניה: {e}"
-
-          TODO_FILE = "/tmp/todos.json"
-          def _todos():
-              try:
-                  with open(TODO_FILE, encoding="utf-8") as f: return json.load(f)
-              except Exception: return []
-          def tool_todo(action="list", item=""):
-              t = _todos()
-              action = (action or "list").strip()
-              if action == "add" and item:
-                  t.append(item.strip())
-                  json.dump(t, open(TODO_FILE, "w", encoding="utf-8"), ensure_ascii=False)
-                  return f"נוסף למטלות: {item}. סה״כ {len(t)}"
-              if action == "clear":
-                  json.dump([], open(TODO_FILE, "w", encoding="utf-8"))
-                  return "רשימת המטלות נוקתה"
-              if not t: return "אין מטלות"
-              return "המטלות שלך: " + "; ".join(f"{i+1}. {x}" for i, x in enumerate(t))
-
-          CONTACTS_FILE = "/tmp/contacts.json"
-          def _load_contacts():
-              try:
-                  with open(CONTACTS_FILE, encoding="utf-8") as f: return json.load(f)
-              except Exception: return []
-          def _save_contacts(c):
-              with open(CONTACTS_FILE, "w", encoding="utf-8") as f: json.dump(c, f, ensure_ascii=False, indent=1)
-          def _find_contacts(name):
-              name = (name or "").strip().lower()
-              c = _load_contacts()
-              if not name: return c
-              return [x for x in c if name in x.get("name", "").lower() or name in x.get("phone", "")]
-          def _resolve_phone(x):
-              x = (x or "").strip()
-              if not x: return ""
-              if x.replace("+", "").replace("-", "").replace(" ", "").isdigit(): return x
-              for h in _find_contacts(x):
-                  if h.get("phone"): return h["phone"]
-              return ""
-          def _resolve_email(x):
-              x = (x or "").strip()
-              if "@" in x: return x
-              for h in _find_contacts(x):
-                  if h.get("email"): return h["email"]
-              return ""
-          def tool_contact_search(name):
-              hits = _find_contacts(name)
-              if not hits: return "לא נמצא איש קשר בשם " + (name or "")
-              return "; ".join(f"{x.get('name')} - טלפון {x.get('phone','אין')}, מייל {x.get('email','אין')}" for x in hits[:6])
-          def tool_contact_add(name, phone="", email=""):
-              c = _load_contacts()
-              for x in c:
-                  if x.get("name", "").strip() == (name or "").strip():
-                      if phone: x["phone"] = phone.strip()
-                      if email: x["email"] = email.strip()
-                      _save_contacts(c); return f"עודכן איש הקשר {name}"
-              c.append({"name": (name or "").strip(), "phone": (phone or "").strip(), "email": (email or "").strip()})
-              _save_contacts(c)
-              return f"נוסף איש קשר {name}"
+                  return f"שגיאת נתוני שבת: {e}"
 
           def tool_now():
               try:
@@ -507,169 +186,90 @@ jobs:
               except Exception:
                   n = datetime.datetime.now()
               days = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
-              return "היום יום %s, %d/%d/%d, השעה %02d:%02d" % (days[n.weekday()], n.day, n.month, n.year, n.hour, n.minute)
+              return "היום יום %s השעה %02d:%02d" % (days[n.weekday()], n.hour, n.minute)
 
           def dispatch(name, a):
               try:
-                  if name == "web_search":       return tool_web_search(a.get("query", ""))
-                  if name == "send_email":       return tool_send_email(a.get("subject", ""), a.get("body", ""), a.get("to", ""))
-                  if name == "download_website": return tool_download_website(a.get("url", ""))
-                  if name == "download_file":    return tool_download_file(a.get("url", ""), bool(a.get("email", False)), bool(a.get("sms", False)))
-                  if name == "calculate":        return tool_calculate(a.get("expression", ""))
-                  if name == "wikipedia":        return tool_wikipedia(a.get("query", ""))
-                  if name == "currency":         return tool_currency(a.get("amount", 1), a.get("from", "USD"), a.get("to", "ILS"))
-                  if name == "weather":          return tool_weather(a.get("city", "תל אביב"))
-                  if name == "zmanim":           return tool_zmanim(a.get("city", "ירושלים"))
-                  if name == "hebrew_date":      return tool_hebrew_date()
-                  if name == "daf_yomi":         return tool_daf_yomi()
-                  if name == "send_sms":         return tool_send_sms(a.get("message", ""), a.get("phone", ""))
-                  if name == "read_url":         return tool_read_url(a.get("url", ""))
-                  if name == "contact_search":   return tool_contact_search(a.get("name", ""))
-                  if name == "contact_add":      return tool_contact_add(a.get("name", ""), a.get("phone", ""), a.get("email", ""))
-                  if name == "tehillim":         return tool_tehillim(a.get("chapter", ""))
-                  if name == "gematria":         return tool_gematria(a.get("text", ""))
-                  if name == "convert_date":     return tool_convert_date(a.get("date", ""))
-                  if name == "daily_study":      return tool_daily_study(a.get("topic", ""))
-                  if name == "translate":        return tool_translate(a.get("text", ""), a.get("to", "en"))
-                  if name == "news":             return tool_news(a.get("topic", ""))
-                  if name == "crypto":           return tool_crypto(a.get("coin", "bitcoin"))
-                  if name == "stock":            return tool_stock(a.get("symbol", ""))
-                  if name in EXTRA:              return EXTRA[name](a)
-                  if name == "now":              return tool_now()
-                  if name == "todo":             return tool_todo(a.get("action", "list"), a.get("item", ""))
+                  if name == "web_search":   return tool_web_search(a.get("query", ""))
+                  if name == "calculate":    return tool_calculate(a.get("expression", ""))
+                  if name == "weather":      return tool_weather(a.get("city", "ירושלים"))
+                  if name == "zmanim":       return tool_zmanim(a.get("city", "ירושלים"))
+                  if name == "shabbat":      return tool_shabbat(a.get("city", "ירושלים"))
+                  if name == "hebrew_date":  return tool_hebrew_date()
+                  if name == "now":          return tool_now()
               except Exception as e:
                   return f"שגיאה בכלי {name}: {e}"
-              return "פעולה לא מוכרת"
+              return "פעולה בוצעה"
 
           def _p(props, required=None):
               return {"type": "object", "properties": props, "required": required or []}
 
           TOOLS = [{"function_declarations": [
-              {"name": "web_search", "description": "חיפוש מידע עדכני באינטרנט", "parameters": _p({"query": {"type": "string"}}, ["query"])},
-              {"name": "send_email", "description": "שליחת מייל", "parameters": _p({"subject": {"type": "string"}, "body": {"type": "string"}, "to": {"type": "string"}}, ["subject", "body"])},
-              {"name": "download_website", "description": "הורדת אתר לשרת", "parameters": _p({"url": {"type": "string"}}, ["url"])},
-              {"name": "download_file", "description": "הורדת קובץ לשרת", "parameters": _p({"url": {"type": "string"}, "email": {"type": "boolean"}, "sms": {"type": "boolean"}}, ["url"])},
-              {"name": "calculate", "description": "חישוב מתמטי מדויק", "parameters": _p({"expression": {"type": "string"}}, ["expression"])},
-              {"name": "wikipedia", "description": "מידע מוויקיפדיה", "parameters": _p({"query": {"type": "string"}}, ["query"])},
-              {"name": "currency", "description": "המרת מטבע", "parameters": _p({"amount": {"type": "number"}, "from": {"type": "string"}, "to": {"type": "string"}}, ["amount", "from", "to"])},
-              {"name": "weather", "description": "מזג אוויר לעיר", "parameters": _p({"city": {"type": "string"}}, ["city"])},
-              {"name": "zmanim", "description": "זמנים הלכתיים", "parameters": _p({"city": {"type": "string"}})},
-              {"name": "hebrew_date", "description": "תאריך עברי ופרשת שבוע", "parameters": _p({})},
-              {"name": "daf_yomi", "description": "הדף היומי", "parameters": _p({})},
-              {"name": "send_sms", "description": "שליחת SMS", "parameters": _p({"message": {"type": "string"}, "phone": {"type": "string"}}, ["message"])},
-              {"name": "contact_search", "description": "חיפוש איש קשר", "parameters": _p({"name": {"type": "string"}}, ["name"])},
-              {"name": "contact_add", "description": "הוספת איש קשר", "parameters": _p({"name": {"type": "string"}, "phone": {"type": "string"}, "email": {"type": "string"}}, ["name"])},
-              {"name": "tehillim", "description": "תהילים לפי פרק", "parameters": _p({"chapter": {"type": "string"}}, ["chapter"])},
-              {"name": "gematria", "description": "גימטריה של מילה", "parameters": _p({"text": {"type": "string"}}, ["text"])},
-              {"name": "convert_date", "description": "המרת תאריך לועזי לעברי", "parameters": _p({"date": {"type": "string"}}, ["date"])},
-              {"name": "daily_study", "description": "לימוד יומי", "parameters": _p({"topic": {"type": "string"}})},
-              {"name": "translate", "description": "תרגום טקסט", "parameters": _p({"text": {"type": "string"}, "to": {"type": "string"}}, ["text", "to"])},
-              {"name": "news", "description": "חדשות אחרונות", "parameters": _p({"topic": {"type": "string"}})},
-              {"name": "crypto", "description": "מחיר קריפטו", "parameters": _p({"coin": {"type": "string"}})},
-              {"name": "stock", "description": "מחיר מניה", "parameters": _p({"symbol": {"type": "string"}}, ["symbol"])},
-              {"name": "todo", "description": "רשימת מטלות", "parameters": _p({"action": {"type": "string"}, "item": {"type": "string"}})},
-              {"name": "now", "description": "שעה ותאריך נוכחי", "parameters": _p({})},
-              {"name": "read_url", "description": "קריאת תוכן דף אינטרנט", "parameters": _p({"url": {"type": "string"}}, ["url"])},
+              {"name": "web_search", "description": "חיפוש מידע עדכני", "parameters": _p({"query": {"type": "string"}}, ["query"])},
+              {"name": "calculate", "description": "חישוב חשבוני מדויק", "parameters": _p({"expression": {"type": "string"}}, ["expression"])},
+              {"name": "weather", "description": "מזג אוויר בעיר", "parameters": _p({"city": {"type": "string"}}, ["city"])},
+              {"name": "zmanim", "description": "זמני היום בהלכה", "parameters": _p({"city": {"type": "string"}})},
+              {"name": "shabbat", "description": "כניסת ויציאת שבת", "parameters": _p({"city": {"type": "string"}})},
+              {"name": "hebrew_date", "description": "תאריך עברי", "parameters": _p({})},
+              {"name": "now", "description": "שעה נוכחית בישראל", "parameters": _p({})},
           ]}]
 
-          EXTRA = {}
-          EXTRA_DECLS = []
-          S_ = {"type": "string"}; N_ = {"type": "number"}; B_ = {"type": "boolean"}
-          def _tool(name, desc, props=None, required=None):
-              def deco(fn):
-                  EXTRA[name] = fn
-                  EXTRA_DECLS.append({"name": name, "description": desc, "parameters": _p(props or {}, required or [])})
-                  return fn
-              return deco
-
-          @_tool("vat", "חישוב מע\"מ", {"amount": N_, "includes": B_, "rate": N_}, ["amount"])
-          def t_vat(a):
-              amt = float(a["amount"]); r = float(a.get("rate") or 18) / 100
-              if a.get("includes"): net = amt / (1 + r); return "לפני מעמ %.2f, המעמ %.2f" % (net, amt - net)
-              return "המעמ %.2f, סך הכל כולל מעמ %.2f" % (amt * r, amt * (1 + r))
-
-          @_tool("shabbat", "כניסת ויציאת שבת ופרשת השבוע לעיר", {"city": S_})
-          def t_shabbat(a):
-              city = (a.get("city") or "ירושלים").strip()
-              d = requests.get("https://www.hebcal.com/shabbat", params={"cfg": "json", "geonameid": CITY_GEO.get(city, 281184),
-                               "lg": "h", "M": "on"}, timeout=12).json()
-              out = []
-              for it in d.get("items", []):
-                  if it.get("category") in ("candles", "havdalah", "parashat"):
-                      tm = re.search(r"\d{1,2}:\d{2}", it.get("title", ""))
-                      out.append(re.sub(r"\s+", " ", it.get("hebrew") or it.get("title", "")) + ((" " + tm.group(0)) if tm else ""))
-              return ("שבת ב%s: " % city + ", ".join(out)) if out else "לא נמצאו נתונים"
-
-          TOOLS[0]["function_declarations"].extend(EXTRA_DECLS)
-
           def gemini_call(contents, use_tools=True):
-              payload = {"contents": contents,
-                         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT + " " + tool_now() + ". "
-                             "בהקלטות קוליות של המתקשר, הבן מה נאמר; הזכר בתשובה רק את העיקר. "
-                             "כל חישוב, אפילו פשוט, בצע בכלי calculate ואל תחשב בעצמך. אם כלי נכשל או לא החזיר תוצאה, אמור זאת ואל תמציא תשובה."}]}}
+              payload = {
+                  "contents": contents,
+                  "system_instruction": {"parts": [{"text": SYSTEM_PROMPT + " " + tool_now()}]}
+              }
               if use_tools:
                   payload["tools"] = TOOLS
+
               last = None
-              deadline = time.time() + 40
               for m in MODELS:
-                  if time.time() > deadline: break
-                  url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-                         f"{m}:generateContent?key={GEMINI_KEY}")
+                  url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_KEY}"
                   try:
-                      r = requests.post(url, json=payload, timeout=20)
+                      r = requests.post(url, json=payload, timeout=12)
                       if r.status_code in (429, 500, 503):
-                          last = f"{r.status_code} {m}"; continue
+                          continue
                       r.raise_for_status()
                       return r.json()
                   except Exception as e:
-                      last = f"{m}: {_safe(repr(e))}"; continue
+                      last = f"{m}: {_safe(repr(e))}"
+                      continue
               raise RuntimeError(f"gemini failed: {last}")
 
           def converse(history, audio_bytes):
               contents = list(history)
-              _ctx.tools = []
               contents.append({"role": "user", "parts": [
                   {"inline_data": {"mime_type": "audio/wav", "data": base64.b64encode(audio_bytes).decode()}},
-                  {"text": "המתקשר דיבר אליך בהקלטה. הבן והשב בקצרה או בצע פעולה."},
+                  {"text": "ענה על שאלת המתקשר בקצרה, בבהירות, וללא שום מקפים או קיצורים."}
               ]})
-              for i in range(6):
-                  data = gemini_call(contents, use_tools=(i < 4))
-                  cand = data["candidates"][0]["content"]
+              for i in range(3):
+                  data = gemini_call(contents, use_tools=(i < 2))
+                  cand = data.get("candidates", [{}])[0].get("content", {})
                   parts = cand.get("parts", [])
                   fcs = [p["functionCall"] for p in parts if "functionCall" in p]
                   if fcs:
                       contents.append(cand)
                       fr = []
                       for fc in fcs:
-                          getattr(_ctx, "tools", []).append(fc.get("name"))
                           res = dispatch(fc.get("name", ""), fc.get("args", {}) or {})
-                          fr.append({"functionResponse": {"name": fc.get("name"),
-                                                          "response": {"result": res}}})
+                          fr.append({"functionResponse": {"name": fc.get("name"), "response": {"result": res}}})
                       contents.append({"role": "user", "parts": fr})
                       continue
                   txt = "".join(p.get("text", "") for p in parts).strip()
-                  user_turns = [h for h in history if h["role"] == "user"]
-                  for h in user_turns[:-2]:
-                      h["parts"] = [{"text": "[הקלטה קולית קודמת]"}]
-                  history.append({"role": "user", "parts": [
-                      {"inline_data": {"mime_type": "audio/wav", "data": base64.b64encode(audio_bytes).decode()}}]})
+                  history.append({"role": "user", "parts": [{"text": "[שאלה קולית]"}]})
                   history.append({"role": "model", "parts": [{"text": txt or "בוצע"}]})
-                  if len(history) > 16:
-                      del history[:len(history) - 16]
-                  while history and history[0]["role"] != "user":
-                      del history[0]
+                  if len(history) > 8:
+                      del history[:len(history) - 8]
                   return txt or "הפעולה בוצעה"
-              return "סליחה, לא הצלחתי להשלים את הבקשה"
+              return "סליחה, לא הצלחתי לקבל מענה."
 
           def esc(t, n=850):
-              # טיפול בקיצורים עם מקף
               t = re.sub(r'(^|\s)כ-(\d+)', r'\1כ \2', t)
               t = re.sub(r'(^|\s)מ-(\d+)', r'\1מ \2', t)
               t = re.sub(r'(^|\s)ב-(\d+)', r'\1ב \2', t)
               t = re.sub(r'(^|\s)ל-(\d+)', r'\1ל \2', t)
               t = re.sub(r"(?<=\d)\.(?=\d)", " נקודה ", t)
-              # החלפת כל סימני המקף והפיסוק הבעייתיים
-              for ch in ("-", "–", "—", "=", "&", ".", "\n", "\r", '"', "'", "`", "<", ">", "*", "#", "%"):
+              for ch in ("-", "–", "—", "=", "&", ".", "\n", "\r", '"', "'", "`", "<", ">", "*", "#", "%", "(", ")"):
                   t = t.replace(ch, " ")
               t = re.sub(r"\s+", " ", t).strip()
               if len(t) > n:
@@ -681,7 +281,7 @@ jobs:
               if not path.startswith("ivr2:"):
                   path = "ivr2:" + path
               r = requests.get("https://www.call2all.co.il/ym/api/DownloadFile",
-                               params={"token": YEMOT_TOKEN, "path": path}, timeout=30)
+                               params={"token": YEMOT_TOKEN, "path": path}, timeout=20)
               r.raise_for_status()
               return r.content
 
@@ -689,7 +289,6 @@ jobs:
           def yemot():
               p = request.values
               print("YEMOT-REQ:", dict(p), flush=True)
-              _ctx.caller = p.get("ApiPhone", "") or p.get("ApiDID", "")
               call_id = p.get("ApiCallId", "anon")
               if p.get("hangup") or p.get("ApiHangup"):
                   SESSIONS.pop(call_id, None)
