@@ -35,8 +35,8 @@ jobs:
           YEMOT_TOKEN    = os.environ.get("YEMOT_TOKEN", "")
 
           SYSTEM_PROMPT = (
-              "אתה עוזר קולי טלפוני חכם, מנומס וענייני בעברית הפונה לציבור שומר תורה ומצוות. "
-              "ענה תשובות קצרות, ברורות ותמציתיות המתאימות להשמעה טלפונית, ללא סימני עיצוב מיוחדים (כגון כוכביות או סולמיות)."
+              "אתה עוזר קולי טלפוני חכם, מנומס וענייני בעברית, הפועל בשפה מכובדת ונקייה ומותאם לציבור שומר תורה ומצוות. "
+              "ענה תשובות תמציתיות, ברורות ומותאמות לשמיעה בטלפון, ללא שום סימני עיצוב מיוחדים (כגון כוכביות, סולמיות או מקפים מיותרים)."
           )
 
           client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
@@ -51,12 +51,12 @@ jobs:
                   res.raise_for_status()
                   return res.content
               except Exception as e:
-                  print(f"Error downloading recording {path}: {e}", flush=True)
+                  print(f"שגיאה בהורדת הקלטה {path}: {e}", flush=True)
                   return None
 
           def ask_gemini_audio(audio_bytes):
               if not client:
-                  return "מפתח הגישה אינו מוגדר."
+                  return "מפתח הגישה לבינה המלאכותית אינו מוגדר."
               try:
                   response = client.models.generate_content(
                       model=GEMINI_MODEL,
@@ -65,7 +65,7 @@ jobs:
                               data=audio_bytes,
                               mime_type="audio/wav",
                           ),
-                          "הקשב לשאלת המשתמש וענה עליה בעברית בצורה קצרה וברורה להשמעה בטלפון."
+                          "הקשב לשאלת המשתמש וענה עליה בעברית בצורה קצרה, מכובדת וברורה להשמעה בטלפון."
                       ],
                       config=types.GenerateContentConfig(
                           system_instruction=SYSTEM_PROMPT
@@ -73,7 +73,7 @@ jobs:
                   )
                   return response.text.strip() if response.text else "לא התקבלה תשובה."
               except Exception as e:
-                  print(f"Gemini API Error: {e}", flush=True)
+                  print(f"שגיאת תקשורת עם המודל: {e}", flush=True)
                   return "אירעה שגיאה בעיבוד התשובה."
 
           def clean_for_yemot(txt):
@@ -87,17 +87,14 @@ jobs:
               val = request.values
               print("REQUEST ARGS:", dict(val), flush=True)
 
-              # קבלת הנתיב להקלטה האחרונה
               rec_list = val.getlist('rec1')
               recording_path = rec_list[-1] if rec_list else val.get('rec1')
 
-              # אם זו פנייה ראשונה וטרם בוצעה הקלטה
               if not recording_path:
                   msg = "שלום, אנא אמור את שאלתך לאחר הצליל."
                   response_text = f"read=t-{msg}=rec1,,record,,,no"
                   return Response(response_text, mimetype="text/plain; charset=utf-8")
 
-              # הורדת ההקלטה ופנייה למודל
               audio_data = download_yemot_recording(recording_path)
               if not audio_data:
                   reply = "לא הצלחתי לקבל את קובץ ההקלטה, אנא נסה שוב."
@@ -105,7 +102,6 @@ jobs:
                   reply = ask_gemini_audio(audio_data)
 
               cleaned = clean_for_yemot(reply)
-              # השמעת התשובה והעברה להקלטת השאלה הבאה
               response_text = f"read=t-{cleaned}=rec1,,record,,,no"
               return Response(response_text, mimetype="text/plain; charset=utf-8")
 
