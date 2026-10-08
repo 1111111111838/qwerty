@@ -35,7 +35,7 @@ jobs:
           YEMOT_TOKEN    = os.environ.get("YEMOT_TOKEN", "")
 
           SYSTEM_PROMPT = (
-              "אתה עוזר קולי טלפוני חכם, מנומס וענייני בעברית, הפועל בשפה מכובדת ונקייה ומותאם לציבור שומר תורה ומצוות. "
+              "אתה עוזר קולי טלפוני חכם, מנומס וענייני בעברית. "
               "ענה תשובות תמציתיות, ברורות ומותאמות לשמיעה בטלפון, ללא שום סימני עיצוב מיוחדים (כגון כוכביות, סולמיות או מקפים מיותרים)."
           )
 
@@ -45,6 +45,8 @@ jobs:
               if not YEMOT_TOKEN:
                   print("YEMOT_TOKEN is missing!", flush=True)
                   return None
+              if not path.startswith("ivr2:"):
+                  path = "ivr2:" + path
               url = "https://www.call2all.co.il/ym/api/DownloadFile"
               try:
                   res = requests.get(url, params={"token": YEMOT_TOKEN, "path": path}, timeout=30)
