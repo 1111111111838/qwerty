@@ -319,8 +319,17 @@ jobs:
             if [ -n "$URL" ]; then
               echo "=========================================================="
               echo "השרת מוכן לפעולה!"
-              echo "הכתובת עבור api_link בימות המשיח היא:"
-              echo "$URL/yemot"
+              echo "הכתובת היא: $URL/yemot"
+              echo "מעדכן את שלוחה 2 בימות המשיח..."
+              
+              CONFIG_DATA="type=api"$'\n'"api_link=$URL/yemot"$'\n'"api_wait_answer_music_on_hold=yes"
+              
+              UPDATE_RES=$(curl -s -X POST "https://www.call2all.co.il/ym/api/UploadTextFile" \
+                -d "token=$YEMOT_TOKEN" \
+                -d "what=ivr2:2/ext.ini" \
+                --data-urlencode "contents=$CONFIG_DATA")
+              
+              echo "תגובת עדכון ימות המשיח: $UPDATE_RES"
               echo "=========================================================="
               FOUND=1
               break
